@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.mai/
+dist/
+*.egg-info/
+.pytest_cache/
+node_modules/
+desktop/dist/
+desktop/out/
+desktop/.vite/
+*.spec

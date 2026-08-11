@@ -1,0 +1,13 @@
+appId: com.mai-agent.desktop
+productName: MAI-agent
+directories:
+  output: dist
+files:
+  - out/**/*
+  - assets/**/*
+win:
+  target: portable
+  icon: assets/icon.ico
+nsis:
+  oneClick: true
+  perMachine: false
