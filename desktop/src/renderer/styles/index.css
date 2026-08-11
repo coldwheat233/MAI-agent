@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design Tokens ──────────────────────────── */
+:root,
+html[data-theme='dark'] {
+  --bg: #0f1117;
+  --surface: #15161d;
+  --surface2: #1c1d26;
+  --border: #252630;
+  --text: #e1e1e8;
+  --text2: #8b8d9e;
+  --text3: #505260;
+  --accent: #6c8cff;
+  --green: #4caf93;
+  --red: #e0556a;
+  --yellow: #d4a853;
+  --user-bg: #1c2333;
+  --user-border: #2d3a55;
+  --tool-bg: #14171f;
+}
+
+html[data-theme='light'] {
+  --bg: #f4f4f7;
+  --surface: #ffffff;
+  --surface2: #f0f0f4;
+  --border: #e0e0e8;
+  --text: #191925;
+  --text2: #5b5b70;
+  --text3: #9a9ab0;
+  --accent: #4c6ef5;
+  --green: #2b8a5c;
+  --red: #c92a2a;
+  --yellow: #b8860b;
+  --user-bg: #e8eef8;
+  --user-border: #c0d0f0;
+  --tool-bg: #f8f8fc;
+}
+
+/* ── Base Reset ─────────────────────────────── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbar ──────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+/* ── Code Highlighting Overrides ────────────── */
+pre {
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace !important;
+}
+
+code {
+  font-family: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace !important;
+  font-size: 0.875em;
+}
+
+/* ── Prose Adjustments for Chat ─────────────── */
+.chat-prose p { margin: 0.25em 0; }
+.chat-prose pre { margin: 0.5em 0; border-radius: 0.5rem; }
+.chat-prose code::before, .chat-prose code::after { content: none; }
+.chat-prose ul, .chat-prose ol { margin: 0.25em 0; padding-left: 1.5em; }
+.chat-prose table { width: 100%; margin: 0.5em 0; }
+.chat-prose th, .chat-prose td {
+  border: 1px solid var(--border);
+  padding: 0.375em 0.75em;
+  text-align: left;
+}
+.chat-prose th { background: var(--surface2); font-weight: 600; }
+.chat-prose h1, .chat-prose h2, .chat-prose h3 { margin: 0.75em 0 0.25em; }
