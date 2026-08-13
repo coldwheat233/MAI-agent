@@ -76,7 +76,7 @@ export function EmptyState({ onPromptClick }: EmptyStateProps) {
                 onClick={() => handleSessionClick(s.session_id)}
                 className="w-full text-left px-4 py-2.5 rounded-lg hover:bg-[var(--surface2)] text-sm text-[var(--text2)] hover:text-[var(--text)] transition-colors"
               >
-                <span className="font-mono text-xs text-[var(--accent)]">{s.session_id}</span>
+                <span className="font-mono text-xs text-[var(--accent)]">{s.title || s.session_id}</span>
                 <span className="text-[var(--text3)] ml-3">{s.message_count} msgs</span>
               </button>
             ))}

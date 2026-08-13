@@ -303,7 +303,7 @@ export function Sidebar() {
                 >
                   <div className="flex items-center gap-1.5 mb-1">
                     <MessageSquare size={11} className="text-[var(--accent)] shrink-0" />
-                    <span className="text-[11px] font-medium text-[var(--text)] truncate">{r.session_id}</span>
+                    <span className="text-[11px] font-medium text-[var(--text)] truncate">{r.title || r.session_id}</span>
                   </div>
                   {r.matches?.slice(0, 2).map((m: string, i: number) => (
                     <div key={i} className="text-[10px] text-[var(--text3)] truncate ml-4 leading-relaxed">
@@ -387,7 +387,7 @@ export function Sidebar() {
                           }`}
                         >
                           <MessageSquare size={12} className={`shrink-0 ${s.session_id === currentId ? 'text-[var(--accent)]' : 'text-[var(--text3)]'}`} />
-                          <span className="text-[11px] truncate flex-1">{s.session_id}</span>
+                          <span className="text-[11px] truncate flex-1">{s.title || s.session_id}</span>
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.session_id, s.session_id) }}
                             className="p-0.5 rounded text-[var(--text3)] hover:text-[var(--red)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0"

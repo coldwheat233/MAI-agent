@@ -404,6 +404,18 @@ def get_session_workspace(session_id: str, project_root: str = ".") -> Optional[
     return row["workspace_path"]
 
 
+def _session_title(conn: sqlite3.Connection, session_id: str) -> str:
+    """取 session 首条 user 消息压成一行短标题（截断 50 字），无则空串。"""
+    row = conn.execute(
+        "SELECT content FROM messages WHERE session_id = ? AND role = 'user'"
+        " ORDER BY position ASC LIMIT 1",
+        (session_id,),
+    ).fetchone()
+    if row is None or not row["content"]:
+        return ""
+    return " ".join(row["content"].split())[:50]
+
+
 def list_sessions(project_root: str = ".") -> list[dict[str, Any]]:
     """当前 workspace 的所有 session（按 updated_at desc）。"""
     workspace_path = str(Path(project_root).resolve())
@@ -414,7 +426,12 @@ def list_sessions(project_root: str = ".") -> list[dict[str, Any]]:
         (workspace_path,),
     ).fetchall()
     return [
-        {"session_id": r["id"], "message_count": r["message_count"], "updated_at": r["updated_at"] or ""}
+        {
+            "session_id": r["id"],
+            "message_count": r["message_count"],
+            "updated_at": r["updated_at"] or "",
+            "title": _session_title(conn, r["id"]),
+        }
         for r in rows
     ]
 
@@ -459,6 +476,9 @@ def search_sessions(keyword: str, project_root: str = ".") -> list[dict[str, Any
             if end < len(content):
                 snippet = snippet + "..."
             by_session[sid]["matches"].append(snippet)
+    # 补充标题（首条 user 消息）
+    for sid in by_session:
+        by_session[sid]["title"] = _session_title(conn, sid)
     return list(by_session.values())
 
 

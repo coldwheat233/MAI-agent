@@ -24,7 +24,7 @@ export function SessionItem({ session, isActive, onClick }: SessionItemProps) {
       <div className="flex items-center gap-2">
         <MessageSquare size={14} className={`shrink-0 ${isActive ? 'text-[var(--accent)]' : 'text-[var(--text3)]'}`} />
         <div className="flex-1 min-w-0">
-          <div className="text-[13px] font-medium truncate">{session.session_id}</div>
+          <div className="text-[13px] font-medium truncate">{session.title || session.session_id}</div>
           <div className="flex items-center gap-2 text-[10px] text-[var(--text3)]">
             {timeStr && <span>{timeStr}</span>}
             <span>{session.message_count} msgs</span>

@@ -532,8 +532,16 @@ async def _compact_context(
             first_non_sys += 1
         else:
             break
-    middle = messages[first_non_sys:-keep_last] if first_non_sys > 0 else messages[:-keep_last]
-    recent = messages[-keep_last:]
+
+    # 切分点必须落在「轮次边界」（user 消息），否则会把 assistant(tool_calls) 拆进 middle、
+    # 对应的 tool 结果留在 recent，产生孤儿 tool 消息 → LLM 400
+    # (Messages with role 'tool' must be a response to a preceding message with 'tool_calls')
+    split = len(messages) - keep_last
+    while split > first_non_sys and messages[split].role not in ("user", "system"):
+        split -= 1
+
+    middle = messages[first_non_sys:split]
+    recent = messages[split:]
 
     if len(middle) <= 2:
         return messages  # 中间没有足够内容可摘要
