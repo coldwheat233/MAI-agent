@@ -1,5 +1,7 @@
 """Tests for session memory threshold logic."""
 
+import pytest
+
 from mai_agent.core.models import (
     Message, SystemMessage, UserMessage, AssistantMessage,
     ToolCall, FunctionCall,
@@ -112,3 +114,31 @@ def test_double_extraction_blocked_by_token_delta():
 
     # Same messages, no new tokens → should NOT extract
     assert not should_extract(msgs)
+
+
+# ── 回归：engine._extract_memory 必须用 messages=（不是 recent_messages=） ──
+
+
+@pytest.mark.asyncio
+async def test_extract_memory_uses_messages_kwarg(temp_dir, monkeypatch):
+    """回归之前的 'extract_and_persist() got unexpected keyword argument recent_messages'。"""
+    import mai_agent.services.memory as memory_mod
+    from mai_agent.core.engine import AgentEngine, EngineConfig
+    from mai_agent.core.models import UserMessage
+
+    captured = {}
+
+    async def fake_extract(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(memory_mod, "extract_and_persist", fake_extract)
+
+    engine = AgentEngine(EngineConfig(llm_api_key="test", cwd=temp_dir))
+    engine._messages = [UserMessage(content="hello")]
+
+    await engine._extract_memory()
+
+    assert "messages" in captured, "必须用 messages= 参数名"
+    assert "recent_messages" not in captured, "不能再传旧参数名 recent_messages="
+    assert captured["messages"] == engine._messages

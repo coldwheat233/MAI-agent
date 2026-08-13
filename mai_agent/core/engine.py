@@ -232,13 +232,13 @@ class AgentEngine:
                         await asyncio.sleep(15)
                         if on_progress:
                             await on_progress(StepProgress(
-                                step=0, max_steps=config.max_turns,
+                                step=0, max_steps=self._loop_config.max_turns,
                                 event="text", text=".",
                             ))
 
                 if on_progress:
                     await on_progress(StepProgress(
-                        step=0, max_steps=config.max_turns,
+                        step=0, max_steps=self._loop_config.max_turns,
                         event="text",
                         text="[四脑协调中——auto 模式自动分析任务...]\n",
                     ))
@@ -377,7 +377,7 @@ class AgentEngine:
         try:
             from mai_agent.services.memory import extract_and_persist
             await extract_and_persist(
-                recent_messages=self._messages,
+                messages=self._messages,
                 project_root=self.config.cwd,
                 api_key=self.config.llm_api_key,
                 base_url=self.config.llm_base_url or "https://api.deepseek.com/v1",

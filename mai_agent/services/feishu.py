@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -143,27 +144,28 @@ class FeishuClient:
         if doc_id and content:
             await self._write_content(doc_id, content)
 
-        # Link to knowledge base if space_id provided
+        # Move the doc into the knowledge base if space_id provided.
+        # NOTE: creating a wiki node via POST /wiki/v2/spaces/{space_id}/nodes
+        # creates a NEW blank doc (ignoring obj_token), so we must use the
+        # move_docs_to_wiki endpoint to attach the already-written doc.
         if doc_id and space_id:
-            body = {
-                "space_id": space_id,
-                "parent_node_token": parent_node_token,
-                "node_type": "origin",
-                "obj_type": "docx",
-                "obj_token": doc_id,
-                "title": title,
-            }
-            node = await self._request(
-                "POST", f"/wiki/v2/spaces/{space_id}/nodes",
-                json=body,
+            await self._request(
+                "POST", f"/wiki/v2/spaces/{space_id}/nodes/move_docs_to_wiki",
+                json={
+                    "obj_type": "docx",
+                    "obj_token": doc_id,
+                    "parent_wiki_token": parent_node_token,
+                    "apply": True,
+                },
             )
-            return node.get("node", {}).get("obj_token", doc_id)
+            # After move, the doc keeps the same document_id as its wiki obj_token.
+            return doc_id
 
         return doc_id
 
     async def _write_content(self, doc_token: str, content: str) -> None:
-        """Write text content to a document (batched to avoid API limits)."""
-        blocks = _text_to_blocks(content)
+        """Write markdown content to a document (batched to avoid API limits)."""
+        blocks = _markdown_to_blocks(content)
         batch_size = 50
         for i in range(0, len(blocks), batch_size):
             batch = blocks[i:i + batch_size]
@@ -220,7 +222,7 @@ def _blocks_to_text(blocks: list) -> str:
 
 
 def _text_to_blocks(text: str) -> list[dict]:
-    """Convert plain text lines to Feishu block format."""
+    """Convert plain text lines to Feishu block format (simple fallback)."""
     blocks = []
     for line in text.splitlines():
         if not line.strip():
@@ -233,3 +235,164 @@ def _text_to_blocks(text: str) -> list[dict]:
             },
         })
     return blocks
+
+
+# ── Markdown → Feishu blocks ──────────────────────────────
+#
+# Feishu docx block_type 映射（关键枚举）:
+#   2  text      3-11 heading1-9   12 bullet    13 ordered
+#   14 code      15 quote          22 divider
+#
+# 文本内联样式 (text_element_style): bold / italic / inline_code / link
+
+_INLINE_RE = re.compile(
+    r"(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))"
+)
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+
+def _parse_inline(text: str) -> list[dict]:
+    """Parse inline markdown (bold / italic / inline code / links) into text_run elements."""
+    elements: list[dict] = []
+    pos = 0
+    for m in _INLINE_RE.finditer(text):
+        if m.start() > pos:
+            elements.append(_text_run(text[pos:m.start()]))
+        token = m.group(0)
+        if token.startswith("**") and token.endswith("**") and len(token) > 4:
+            elements.append(_text_run(token[2:-2], bold=True))
+        elif token.startswith("*") and token.endswith("*") and len(token) > 2:
+            elements.append(_text_run(token[1:-1], italic=True))
+        elif token.startswith("`") and token.endswith("`") and len(token) > 2:
+            elements.append(_text_run(token[1:-1], inline_code=True))
+        else:
+            lm = _LINK_RE.match(token)
+            if lm:
+                elements.append(_text_run(lm.group(1), link=lm.group(2)))
+            else:
+                elements.append(_text_run(token))
+        pos = m.end()
+    if pos < len(text):
+        elements.append(_text_run(text[pos:]))
+    return elements
+
+
+def _text_run(content: str, bold: bool = False, italic: bool = False,
+              inline_code: bool = False, link: str = "") -> dict:
+    """Build a single Feishu text_run element."""
+    style: dict[str, Any] = {}
+    if bold:
+        style["bold"] = True
+    if italic:
+        style["italic"] = True
+    if inline_code:
+        style["inline_code"] = True
+    if link:
+        style["link"] = {"url": link}
+    return {"text_run": {"content": content, "text_element_style": style}}
+
+
+def _rich_block(field: str, block_type: int, text: str) -> dict:
+    """Build a block that carries a single inline-rich text field."""
+    return {
+        "block_type": block_type,
+        field: {"elements": _parse_inline(text), "style": {}},
+    }
+
+
+def _markdown_to_blocks(md: str) -> list[dict]:
+    """Convert markdown text to a Feishu block tree.
+
+    Supports:
+      - headings (# → ######)
+      - bullet lists (- / * / +)
+      - ordered lists (1. / 1))
+      - blockquotes (>)
+      - fenced code blocks (```)
+      - horizontal rules (--- / ***)
+      - inline bold / italic / inline code / links
+    """
+    blocks: list[dict] = []
+    lines = md.splitlines()
+    i, n = 0, len(lines)
+    in_code = False
+    code_lines: list[str] = []
+
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+
+        # Fenced code block
+        if stripped.startswith("```"):
+            if in_code:
+                blocks.append(_code_block("\n".join(code_lines)))
+                code_lines = []
+                in_code = False
+            else:
+                in_code = True
+            i += 1
+            continue
+        if in_code:
+            code_lines.append(line)
+            i += 1
+            continue
+
+        # Blank line
+        if not stripped:
+            i += 1
+            continue
+
+        # Horizontal rule
+        if re.match(r"^(-{3,}|\*{3,}|_{3,})$", stripped):
+            blocks.append({"block_type": 22, "divider": {}})
+            i += 1
+            continue
+
+        # Heading (# → ######)
+        hm = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if hm:
+            level = len(hm.group(1))
+            blocks.append(_rich_block(f"heading{level}", 2 + level, hm.group(2)))
+            i += 1
+            continue
+
+        # Bullet list
+        bm = re.match(r"^[-*+]\s+(.*)$", stripped)
+        if bm:
+            blocks.append(_rich_block("bullet", 12, bm.group(1)))
+            i += 1
+            continue
+
+        # Ordered list
+        om = re.match(r"^(\d+)[.)]\s+(.*)$", stripped)
+        if om:
+            blocks.append(_rich_block("ordered", 13, om.group(2)))
+            i += 1
+            continue
+
+        # Blockquote
+        if stripped.startswith(">"):
+            blocks.append(_rich_block("quote", 15, stripped.lstrip(">").strip()))
+            i += 1
+            continue
+
+        # Normal paragraph
+        blocks.append(_rich_block("text", 2, stripped))
+        i += 1
+
+    # Unclosed code block
+    if in_code and code_lines:
+        blocks.append(_code_block("\n".join(code_lines)))
+
+    return blocks
+
+
+def _code_block(code: str) -> dict:
+    """Build a Feishu code block (block_type 14)."""
+    return {
+        "block_type": 14,
+        "code": {
+            "elements": [{"text_run": {"content": code, "text_element_style": {}}}],
+            "style": {},
+        },
+    }
