@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 class AgentToolInput(ToolInput):
-    brain: str = Field(description="要激活的脑名称: dev_explorer | dev_validator | knowledge_explorer")
+    brain: str = Field(description="要激活的脑名称: dev_explorer | dev_validator | knowledge_explorer | deploy_planner")
     prompt: str = Field(description="发给子Agent的任务描述")
     max_turns: int = Field(default=10, description="子Agent最大轮数")
     model: Optional[str] = Field(default=None, description="可选: 指定模型")

@@ -216,79 +216,10 @@ class AgentEngine:
         # 含 git subprocess + 文件扫描，放线程池避免阻塞事件循环
         await asyncio.to_thread(self._refresh_system_prompt)
 
-        # ── 四脑自动协调 ──
-        # 由 permission_mode 驱动，auto 模式下每次提交都跑，
-        # plan 只跑 explore、manual 跳过。
-        # 仅 "hi" 一类单短词消息直接跳过（不浪费 token）。
-        _mode = self._run_context.permission_mode
-        if _mode in ("auto"):
-            keepalive_task: asyncio.Task | None = None
-            try:
-                from mai_agent.brains.coordinator import (
-                    Coordinator, CoordinatorContext, BrainState,
-                )
-                async def _coord_keepalive():
-                    while True:
-                        await asyncio.sleep(15)
-                        if on_progress:
-                            await on_progress(StepProgress(
-                                step=0, max_steps=self._loop_config.max_turns,
-                                event="text", text=".",
-                            ))
-
-                if on_progress:
-                    await on_progress(StepProgress(
-                        step=0, max_steps=self._loop_config.max_turns,
-                        event="text",
-                        text="[四脑协调中——auto 模式自动分析任务...]\n",
-                    ))
-                    keepalive_task = asyncio.create_task(_coord_keepalive())
-
-                if self._coordinator_ctx is None:
-                    self._coordinator_ctx = CoordinatorContext(state=BrainState.IDLE)
-                coord = Coordinator(
-                    registry=self._tools,
-                    context=context,
-                    model=self.config.llm_model,
-                    api_key=self.config.llm_api_key,
-                    base_url=self.config.llm_base_url or "https://api.deepseek.com/v1",
-                )
-                coord.state = self._coordinator_ctx
-
-                if self.config.permission_mode == "plan":
-                    # plan: 只 explore，生成 checklist 但不验证
-                    checklist = await coord.explore(user_input)
-                    self._coordinator_ctx = coord.state
-                    self._loop_config.system_prompt += (
-                        f"\n\n[四脑 explore — {coord.state.status_bar()}]\n"
-                        f"Checklist: {checklist}\n"
-                        "[plan 模式 — 不执行写操作。]"
-                    )
-                else:
-                    # auto: 完整 explore→validate 循环
-                    result = await coord.run_full_cycle(user_input)
-                    self._coordinator_ctx = coord.state
-                    self._loop_config.system_prompt += (
-                        f"\n\n[四脑协调结果 — {self._coordinator_ctx.status_bar()}]\n"
-                        f"{result}\n"
-                        "[协调结束 — 请基于以上分析和 checklist 继续执行任务。]"
-                    )
-                logger.info(
-                    "Coordinator done: state=%s iteration=%d mode=%s",
-                    self._coordinator_ctx.state.value,
-                    self._coordinator_ctx.iteration,
-                    self.config.permission_mode,
-                )
-            except Exception as exc:
-                logger.warning("Coordinator 运行失败，跳过: %s", exc)
-            finally:
-                if keepalive_task is not None:
-                    keepalive_task.cancel()
-        elif self._coordinator_ctx is not None and self._coordinator_ctx.state.value != "idle":
-            # 短消息 / manual 模式：不跑新周期，但保留上一轮协调状态
-            self._loop_config.system_prompt += (
-                "\n\n" + self._coordinator_ctx.status_bar()
-            )
+        # 四脑协调器已拆除：四个脑（dev_explorer / dev_validator / knowledge_explorer /
+        # deploy_planner）现在通过 Agent 工具按需孵化——模型在需要时自行调用，不再每个
+        # auto 任务强制跑 explore→validate（那是意图识别的问题，本应由模型的 tool-call
+        # 自然决定，前置分类器是重复劳动 + 上下文膨胀的根因）。
 
         # Start logger background writer if needed
         if self._slog and not self._slog._running:
