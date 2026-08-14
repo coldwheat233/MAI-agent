@@ -3,6 +3,7 @@ __pycache__/
 .env
 .mai/
 dist/
+build/
 *.egg-info/
 .pytest_cache/
 _tmp_skill_repo/
@@ -11,3 +12,4 @@ desktop/dist/
 desktop/out/
 desktop/.vite/
 *.spec
+!backend.spec

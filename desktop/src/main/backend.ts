@@ -4,6 +4,7 @@
 import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
 import http from 'http'
+import { app } from 'electron'
 
 const SERVER_PORT = parseInt(process.env.MAI_PORT || '8765')
 const SERVER_URL = `http://localhost:${SERVER_PORT}`
@@ -11,6 +12,26 @@ const PYTHON_CMD = 'python'
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..')
 
 let pythonProcess: ChildProcess | null = null
+
+/** 返回后端启动命令。打包模式 spawn 自包含 backend.exe，开发模式 spawn 系统 Python。 */
+function backendCommand(): { cmd: string; args: string[]; cwd: string } {
+  if (app.isPackaged) {
+    // 打包模式：backend.exe 经 extraResources 打到 resources/backend/backend.exe，
+    // 自包含 Python，无系统依赖、无黑框，端口经 MAI_PORT 环境变量传入。
+    const exePath = path.join(process.resourcesPath, 'backend', 'backend.exe')
+    return { cmd: exePath, args: [], cwd: path.dirname(exePath) }
+  }
+  // 开发模式：复用项目里的 Python + mai_agent 包
+  return {
+    cmd: PYTHON_CMD,
+    args: [
+      '-X', 'utf8',
+      '-c',
+      `import uvicorn; from mai_agent.server import app; uvicorn.run(app, host="127.0.0.1", port=${SERVER_PORT}, log_level="error")`,
+    ],
+    cwd: PROJECT_ROOT,
+  }
+}
 
 export function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -29,16 +50,14 @@ export function startPythonBackend(): Promise<void> {
     function doSpawn() {
       const env = {
         ...process.env,
+        MAI_PORT: String(SERVER_PORT),
         PYTHONIOENCODING: 'utf-8',
         PYTHONUTF8: '1',
       }
 
-      pythonProcess = spawn(PYTHON_CMD, [
-        '-X', 'utf8',
-        '-c',
-        `import uvicorn; from mai_agent.server import app; uvicorn.run(app, host="127.0.0.1", port=${SERVER_PORT}, log_level="error")`
-      ], {
-        cwd: PROJECT_ROOT,
+      const { cmd, args, cwd } = backendCommand()
+      pythonProcess = spawn(cmd, args, {
+        cwd,
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,

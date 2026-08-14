@@ -38,9 +38,23 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "out/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/backend.exe",
+        "to": "backend/backend.exe"
+      }
+    ],
     "win": {
       "target": "portable",
-      "icon": "assets/icon.ico"
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false
     }
   }
 }
