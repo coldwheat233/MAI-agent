@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BookOpen, Plus, Trash2, CheckCircle, Clock, GraduationCap, RefreshCw } from 'lucide-react'
+import { SERVER_URL } from '@/lib/constants'
 
 interface LearningItem {
   id: string
@@ -13,7 +14,7 @@ interface LearningItem {
   feishu_doc_token: string | null
 }
 
-const API = 'http://localhost:8765/api/learning-queue'
+const API = `${SERVER_URL}/api/learning-queue`
 const priorityLabel: Record<string, string> = { high: '高', medium: '中', low: '低' }
 
 export function LearningPanel() {

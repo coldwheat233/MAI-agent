@@ -9,10 +9,10 @@
 
 不变式:
   1. cards 严格按 card_dates 升序
-  2. 树 cover [0, len(cards)), 宽度 = next_power_of_2
-  3. card_count == R - L
+  2. 树 cover [0, padded_n)，padded_n = next_power_of_2(len(cards))；[n, padded_n) 为虚拟叶子
+  3. card_count == 子树内真实卡片数（虚拟叶子为 0），且 card_count <= R - L
   4. dirty → 子树有未反映到 summary 的变化
-  5. topics 是子树所有 tags 的并集
+  5. topics 是子树所有 tags 的并集（虚拟叶子为空）
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 SEGMENTS_FILE = ".mai/memory/segments.json"
-MAX_BATCH_SHIFTS = 100  # 累积此数量的位移后触发全量重算
 
 
 # ── SegNode ──────────────────────────────────────────────
@@ -42,7 +41,7 @@ class SegNode:
     R: int                         # 区间右边界（开），R > L
     summary: str = ""              # LLM 摘要（内部节点有值，叶子空）
     topics: set[str] = field(default_factory=set)
-    card_count: int = 0            # == R - L（维护用）
+    card_count: int = 0            # 子树内真实卡片数（虚拟叶子为 0），可 <= R-L
     dirty: bool = False            # 懒标记
     earliest_date: Optional[date] = None
     latest_date: Optional[date] = None
@@ -108,108 +107,65 @@ class MemorySegTree:
         self.cards: list[str] = []          # 卡片 name，按时间升序
         self.card_dates: list[date] = []    # 并行数组
         self.root: Optional[SegNode] = None
-        self._card_index: dict[str, int] = {}   # name → cards 下标（旧值）
-        self._batch_shifts: list[tuple[int, int]] = []  # (pos, +delta)，分块偏移
-
-    # ── 下标查找（含分块偏移） ────────────────────────
-
-    def _real_index(self, name: str) -> Optional[int]:
-        """获取卡片的真实当前下标。处理 batch_shifts 偏移。"""
-        base = self._card_index.get(name)
-        if base is None:
-            return None
-        idx = base
-        for pos, delta in self._batch_shifts:
-            if idx >= pos:
-                idx += delta
-        return idx
-
-    def _all_real_indices(self) -> dict[str, int]:
-        """重算全部卡片的真实下标（压缩 batch_shifts）。"""
-        result: dict[str, int] = {}
-        for i, name in enumerate(self.cards):
-            result[name] = i
-        self._card_index = result
-        self._batch_shifts.clear()
-        return result
+        self._card_index: dict[str, int] = {}   # name → cards 下标（追加/重建时维护，恒精确）
 
     # ── 建树 ───────────────────────────────────────────
 
     def build(self) -> None:
-        """自底向上构建线段树。O(n)。
+        """自底向上构建完整二叉树（含虚拟叶子）。O(n)。
 
         前置: self.cards 和 self.card_dates 已填充并排序。
-        如果 .mai/memory/segments.json 不存在或损坏，调用此方法从零建树。
+        树 cover [0, padded_n)，padded_n = next_power_of_2(n)；[n, padded_n) 为虚拟叶子。
+        不再做「右子为空提升左子」——那会让 root.R 恒等于卡数，逼每次插入都重建。
         """
         n = len(self.cards)
         if n == 0:
             self.root = None
+            self._card_index = {}
             return
 
-        # 补齐到 2 的幂
         padded_n = 1 << (n - 1).bit_length() if n > 1 else 1
 
-        # 构建叶子层
+        # 叶子层：真实叶子 + 虚拟叶子
         leaves: list[SegNode] = []
         for i in range(padded_n):
             if i < n:
-                # 从卡片文件读取 topics
                 topics = self._read_card_topics(self.cards[i])
-                leaf = SegNode(
-                    L=i, R=i + 1,
-                    topics=topics,
-                    card_count=1,
-                    earliest_date=self.card_dates[i],
-                    latest_date=self.card_dates[i],
-                )
+                leaves.append(SegNode(
+                    L=i, R=i + 1, topics=topics, card_count=1,
+                    earliest_date=self.card_dates[i], latest_date=self.card_dates[i],
+                ))
             else:
-                leaf = SegNode(L=i, R=i + 1, card_count=0)  # 虚拟节点
-            leaves.append(leaf)
+                leaves.append(SegNode(L=i, R=i + 1, card_count=0))  # 虚拟叶子
 
-        # 逐层合并
+        # 逐层合并成完整二叉树（padded_n 为 2 的幂，每层都成对）
         current = leaves
         while len(current) > 1:
             next_level: list[SegNode] = []
             for i in range(0, len(current), 2):
-                left = current[i]
-                right = current[i + 1] if i + 1 < len(current) else None
-
-                if right is None or right.card_count == 0:
-                    # 只有左子有实际内容，直接提升左子
-                    next_level.append(left)
-                    continue
-
-                earliest = left.earliest_date
-                if right.earliest_date and (not earliest or right.earliest_date < earliest):
-                    earliest = right.earliest_date
-                latest = left.latest_date
-                if right.latest_date and (not latest or right.latest_date > latest):
-                    latest = right.latest_date
-
-                parent = SegNode(
+                left, right = current[i], current[i + 1]
+                next_level.append(SegNode(
                     L=left.L, R=right.R,
                     topics=left.topics | right.topics,
                     card_count=left.card_count + right.card_count,
-                    dirty=True,  # 新建，需要 LLM 生成摘要
-                    earliest_date=earliest,
-                    latest_date=latest,
+                    dirty=True,
+                    earliest_date=self._min_date(left.earliest_date, right.earliest_date),
+                    latest_date=self._max_date(left.latest_date, right.latest_date),
                     left=left, right=right,
-                )
-                next_level.append(parent)
+                ))
             current = next_level
 
         self.root = current[0]
-
-        # 构建 card_index
-        for i, name in enumerate(self.cards):
-            self._card_index[name] = i
-        self._batch_shifts.clear()
+        self._card_index = {name: i for i, name in enumerate(self.cards)}
 
     # ── 插入 ───────────────────────────────────────────
 
     def insert(self, name: str, card_date: date, description: str,
                topics: Optional[list[str]] = None) -> int:
-        """插入一张卡片。O(log n + batch_size)。
+        """插入一张卡片。
+
+        追加（新卡日期最新）：O(log n) 路径更新，不重建。
+        中间插入 / 树满扩容：O(n) 全量重建（列表 insert 本就 O(n)，无额外损失）。
 
         Args:
             name: 卡片名（kebab-case，全局唯一）
@@ -229,96 +185,104 @@ class MemorySegTree:
         topics = topics or []
         topic_set = set(topics)
 
-        # 1. 二分查找插入位置
         pos = bisect.bisect_right(self.card_dates, card_date)
+        is_append = (pos == len(self.cards))
         self.cards.insert(pos, name)
         self.card_dates.insert(pos, card_date)
 
-        # 2. 记录分块偏移（延迟 O(n) 全量更新）
-        self._batch_shifts.append((pos, 1))
-        self._card_index[name] = pos  # 插入时的临时下标
+        if self.root is None or len(self.cards) > self.root.R:
+            self.build()                              # 空树 / 容量满 → 重建（摊还 O(1)）
+        elif is_append:
+            self._insert_path_update(pos, topic_set, card_date)   # O(log n)
+        else:
+            self.build()                              # 中间插入 → 重建
 
-        # 3. 树扩展检查
-        rebuilt = False
-        if self.root is None:
-            self.build()
-            return pos
-        if len(self.cards) > self.root.R:
-            self._expand_tree()
-            rebuilt = True  # build() 已重建整棵树，card 已计入
-
-        # 4. 从叶子向上打 dirty 标记（仅当树未被重建时——重建后子树已 dirty）
-        if not rebuilt and self.root:
-            self._dirty_path(pos, topic_set, card_date)
-
-        # 5. batch_shifts 超阈值 → 压缩
-        if len(self._batch_shifts) >= MAX_BATCH_SHIFTS:
-            self._all_real_indices()
-            # 树需要重建（因为旧的叶子下标全乱了）
-            self.build()
-
+        self._card_index[name] = pos
         return pos
 
-    def _expand_tree(self) -> None:
-        """扩容树到 next_power_of_2(len(cards))。"""
-        new_n = 1 << (len(self.cards) - 1).bit_length() if len(self.cards) > 1 else 1
-        if self.root and new_n <= self.root.R:
-            return  # 不需要扩容
+    def _path_to(self, pos: int) -> list[SegNode]:
+        """返回从根到覆盖 pos 的叶子的节点路径。"""
+        path: list[SegNode] = []
+        node = self.root
+        while node is not None:
+            path.append(node)
+            if node.is_leaf:
+                break
+            mid = (node.L + node.R) // 2
+            node = node.left if pos < mid else node.right
+        return path
 
-        # 当前树可能不是满的——重建最简单且正确
-        self.build()
+    def _insert_path_update(self, pos: int, topic_set: set[str], card_date: date) -> None:
+        """追加后沿路径自顶向下更新结构聚合 + 打 dirty（叶子不设 dirty）。"""
+        for node in self._path_to(pos):
+            node.card_count += 1
+            node.topics |= topic_set
+            node.earliest_date = self._min_date(node.earliest_date, card_date)
+            node.latest_date = self._max_date(node.latest_date, card_date)
+            if not node.is_leaf:
+                node.dirty = True
 
-    def _dirty_path(self, pos: int, topics: set[str], card_date: date) -> None:
-        """从根向下走到 pos 的路径，沿途更新 card_count/dirty/topics/日期范围。
+    def _remove_path_update(self, pos: int) -> None:
+        """删除末尾卡片后沿路径自底向上重算结构聚合 + 打 dirty。"""
+        path = self._path_to(pos)
+        for node in reversed(path):
+            node.card_count -= 1
+            if node.is_leaf:
+                node.topics = set()
+                node.earliest_date = None
+                node.latest_date = None
+                node.summary = ""
+            else:
+                node.topics = (node.left.topics if node.left else set()) \
+                    | (node.right.topics if node.right else set())
+                node.earliest_date = self._min_date(
+                    node.left.earliest_date if node.left else None,
+                    node.right.earliest_date if node.right else None,
+                )
+                node.latest_date = self._max_date(
+                    node.left.latest_date if node.left else None,
+                    node.right.latest_date if node.right else None,
+                )
+                node.dirty = True
 
-        插入后树的 L/R 已在 insert 前通过 _expand_tree 保证覆盖 pos，
-        但从根向下找需要不用旧叶子——直接用根遍历。
-        """
-        if self.root is None:
-            return
-        self._dirty_from_root(self.root, pos, topics, card_date)
+    @staticmethod
+    def _min_date(a: Optional[date], b: Optional[date]) -> Optional[date]:
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return a if a < b else b
 
-    def _dirty_from_root(self, node: SegNode, pos: int, topics: set[str],
-                         card_date: date) -> None:
-        """从根向下找到覆盖 pos 的路径，更新祖先。"""
-        if node.L > pos or node.R <= pos:
-            return  # 不在当前节点范围内
-        node.card_count += 1
-        node.topics |= topics
-        node.dirty = True
-        if node.earliest_date is None or card_date < node.earliest_date:
-            node.earliest_date = card_date
-        if node.latest_date is None or card_date > node.latest_date:
-            node.latest_date = card_date
-
-        if node.is_leaf:
-            return
-        if node.left:
-            self._dirty_from_root(node.left, pos, topics, card_date)
-        if node.right:
-            self._dirty_from_root(node.right, pos, topics, card_date)
+    @staticmethod
+    def _max_date(a: Optional[date], b: Optional[date]) -> Optional[date]:
+        if a is None:
+            return b
+        if b is None:
+            return a
+        return a if a > b else b
 
     # ── 删除 ───────────────────────────────────────────
 
     def remove(self, name: str) -> bool:
-        """删除一张卡片。O(log n)。"""
-        idx = self._real_index(name)
+        """删除一张卡片。末尾删除 O(log n)，中间删除 O(n) 重建。"""
+        idx = self._card_index.pop(name, None)
         if idx is None:
-            # 尝试用当前 cards 数组线性查（退化路径）
             try:
                 idx = self.cards.index(name)
             except ValueError:
                 return False
 
+        is_end = (idx == len(self.cards) - 1)
         del self.cards[idx]
         del self.card_dates[idx]
-        self._card_index.pop(name, None)
-        self._batch_shifts.append((idx, -1))
 
-        # 树重建是最可靠的方式
-        if len(self._batch_shifts) >= MAX_BATCH_SHIFTS:
-            self._all_real_indices()
-        self.build()
+        if not self.cards:
+            self.root = None
+            return True
+        if is_end:
+            self._remove_path_update(idx)   # O(log n)
+        else:
+            self.build()                    # 中间删除 → 重建
         return True
 
     # ── 查询 ───────────────────────────────────────────
@@ -687,7 +651,6 @@ class MemorySegTree:
             # 重建 card_index
             for i, name in enumerate(self.cards):
                 self._card_index[name] = i
-            self._batch_shifts.clear()
             return True
         except Exception as exc:
             logger.warning("segments.json 加载失败: %s", exc)
@@ -696,7 +659,13 @@ class MemorySegTree:
     # ── 一致性检查 ─────────────────────────────────────
 
     def verify(self) -> list[str]:
-        """检查树的不变量。返回错误列表，空 = 一致。"""
+        """检查树的不变量。返回错误列表，空 = 一致。
+
+        新不变量（虚拟叶子语义）:
+          - root cover [0, padded_n)，padded_n >= len(cards)
+          - 每个节点 card_count == 子树内真实卡片数（= 左右子之和）
+          - 内部节点 topics == left.topics | right.topics
+        """
         errors: list[str] = []
         if self.root is None:
             if len(self.cards) == 0:
@@ -704,21 +673,23 @@ class MemorySegTree:
             errors.append("cards 非空但 root 为 None")
             return errors
 
-        # 检查 root cover 范围
         if self.root.L != 0:
             errors.append(f"root.L={self.root.L} 应为 0")
         if self.root.R < len(self.cards):
             errors.append(f"root.R={self.root.R} < len(cards)={len(self.cards)}")
 
-        # 递归检查每个节点
         def _check(node: SegNode, depth: int = 0) -> None:
-            actual_cards = node.R - node.L
-            if node.card_count != actual_cards:
-                errors.append(
-                    f"节点 [{node.L},{node.R}) card_count={node.card_count} "
-                    f"!= R-L={actual_cards}"
-                )
             if node.is_leaf:
+                # 真实叶子应有 1 卡，虚拟叶子应为 0
+                if node.L < len(self.cards):
+                    if node.card_count != 1:
+                        errors.append(
+                            f"叶子 [{node.L},{node.R}) 应含 1 卡，实际 card_count={node.card_count}"
+                        )
+                elif node.card_count != 0:
+                    errors.append(
+                        f"虚拟叶子 [{node.L},{node.R}) card_count={node.card_count} 应为 0"
+                    )
                 return
             if node.left is None or node.right is None:
                 errors.append(f"非叶节点 [{node.L},{node.R}) 缺少子节点")
@@ -728,6 +699,13 @@ class MemorySegTree:
                     f"节点 [{node.L},{node.R}) 子节点边界不连续: "
                     f"left.R={node.left.R}, right.L={node.right.L}"
                 )
+            if node.card_count != node.left.card_count + node.right.card_count:
+                errors.append(
+                    f"节点 [{node.L},{node.R}) card_count={node.card_count} "
+                    f"!= left+right={node.left.card_count}+{node.right.card_count}"
+                )
+            if node.topics != (node.left.topics | node.right.topics):
+                errors.append(f"节点 [{node.L},{node.R}) topics 与子节点并集不一致")
             _check(node.left, depth + 1)
             _check(node.right, depth + 1)
 

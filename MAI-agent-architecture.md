@@ -9,8 +9,8 @@
 **MAI-agent** 是 Claude Code 的 Python 复刻。不依赖任何 Agent 框架（LangChain / CrewAI / OpenAI Agents），从 LLM Client 到工具编排全部手写。Electron + React 桌面端，WebSocket 流式交互。
 
 ```
-~12,000 行 Python（49 tools, 122 tests）
-~4,700 行 TypeScript（11 Zustand stores）
+~9,900 行 Python（49 tools, 135 tests）
+~4,000 行 TypeScript（10 Zustand stores）
 DeepSeek v4-pro · FastAPI + WebSocket · Electron 33 + React 18
 ```
 
@@ -86,14 +86,11 @@ engine.submit:
      → build_system_prompt = base + 日期 + cwd + git status
        + CLAUDE.md + memory_context + tagged_memory_context(segtree)
        + skill listing + brain context
-  2. ── 四脑自动协调（auto 模式）──
-     → Coordinator.run_full_cycle(user_input)
-         → explore (dev_explorer 子Agent, 最多12轮)
-         → validate (dev_validator 子Agent, 最多12轮)
-         → BLOCKED? → 循环回 explore（最多3次）
-         → 结果注入 self._loop_config.system_prompt
-     → 协调期间每15s发 keepalive "." 防 WS 超时
+  2. ── 脑模式（可选）──
+     active_brain 非空时，loop.py 把对应脑的专用 system prompt 注入（每轮清除残留）
   3. agent_loop(user_input, llm, registry, context, config, messages)
+     模型在需要时通过 Agent 工具按需孵化子 Agent（dev_explorer / dev_validator 等）
+
   ↓
 agent_loop (思考-行动-观察):
   for step 1..max_turns:
@@ -290,64 +287,45 @@ workspace_switched → workspaceStore.setCwd + sessionStore.fetchSessions
 
 ---
 
-## 10. Session 持久化与工作区定位（2026-08-11 修）
+## 10. Session 持久化与工作区定位（SQLite）
 
 ### 存储结构
 
 ```
-<project>/.mai/
-├── workspaces/
-│   └── <slug>/               # D__PY_PROJ_MAI-agent
-│       ├── sessions/
-│       │   └── <session_id>.json
-│       └── workspace.json     # {"path": "D:/PY/PROJ/MAI-agent"} ← 元数据
-├── memory/
-│   ├── MEMORY.md, tags.json, segments.json, *.md
-├── knowledge/
-│   └── learning_queue.json
-└── logs/
+~/.mai/mai.db                  # 单文件 SQLite（WAL 模式），用户级全局
+├── workspaces(path PK, slug, last_used, created_at)
+├── sessions(id PK, workspace_path FK, updated_at, message_count)
+└── messages(id PK, session_id FK, position, role, content, tool_calls JSON, ...)
 
-~/.mai/workspaces.json         # 全局索引（所有工作区，不随项目切换漂移）
+项目本地 .mai/ 仍用于非会话数据:
+├── memory/                    # MEMORY.md, tags.json, segments.json, *.md
+├── knowledge/learning_queue.json
+└── deploys/, logs/
 ```
 
-### 工作区定位路径解析优先级
-
-```
-1. workspace.json 元数据文件（准确，新数据走这条）
-2. session 文件的 workspace 字段（兼容旧数据）
-3. 修正后的 slug 解码兜底（先拆 __ 再替 _）
-```
-
-- `load_session` 跨工作区查找：当前 → 旧路径 → 全局索引 → `_all_workspace_dirs`
-- `/api/sessions?workspace=X` 支持查询任意工作区 session
-- 新建会话立即落盘（`api_restart`）
+- workspace/session 定位按 SQLite id 全局索引，不再依赖路径 slug 解码。
+- `/api/sessions?workspace=X` 支持查询任意工作区 session。
+- 新建会话立即落盘（`api_restart`）。
 
 ---
 
-## 11. 四脑自动协调（2026-08-11 接入）
+## 11. 四脑（按需孵化的子 Agent）
 
 ```
-修复前：Coordinator 状态机已定义但从未接入 agent_loop，纯手动选脑
-修复后：auto 模式下每次 submit 自动触发
+早期是 Coordinator 状态机（explore→validate 自动循环），2026-08 已拆除——
+前置分类器是意图识别问题，应交给模型的 tool-call 自然决定，
+而非每次 auto 任务强制跑一遍（重复劳动 + 上下文膨胀的根因）。
 
-engine.submit:
-  if permission_mode == "auto":
-    Coordinator.run_full_cycle(user_input)
-      ├─ Phase 1: explore → dev_explorer 子Agent（最多12轮）
-      ├─ Phase 2: validate → dev_validator 子Agent（最多12轮）
-      └─ BLOCKED? → 循环回 explore（最多3次）
-    → 结果注入 system prompt
-
-  plan 模式：只跑 explore，生成 checklist 不验证
-  manual 模式：不跑协调
+现在：四个脑是 brains/definitions.py 里的 AgentDefinition，
+主 Agent 在需要时通过 Agent 工具按需孵化子 Agent（brain=dev_explorer 等）。
 ```
 
-| 脑 | 角色 | 允许工具 | 状态 |
+| 脑 | 角色 | 允许工具 | 触发方式 |
 |---|---|---|---|
-| dev_explorer | 需求拆解、生成 checklist | 6（读+搜+写） | prompt 注入 + 自动调度 ✓ |
-| dev_validator | 验证 checklist、运行测试 | 5（读+搜+bash） | prompt 注入 + 自动调度 ✓ |
-| knowledge_explorer | 识别未知概念 | 4（读+搜+memory） | prompt 注入，未自动调度 |
-| deploy_planner | 部署计划 | 3（读+搜） | 空壳 |
+| dev_explorer | 需求拆解、生成 checklist | 读+搜+写 | Agent 工具按需孵化 |
+| dev_validator | 验证 checklist、运行测试 | 读+搜+bash | Agent 工具按需孵化 |
+| knowledge_explorer | 识别未知概念 | 读+搜+memory | Agent 工具按需孵化 |
+| deploy_planner | 部署计划 | 读+搜 | Agent 工具按需孵化 |
 
 ---
 
@@ -369,12 +347,13 @@ engine.submit:
 
 ---
 
-## 14. 概念检测 + 学习队列（2026-08-11 打通）
+## 14. 知识引擎 + 学习队列（已接线）
 
 每次 submit 后后台触发：
 1. LLM 提取技术概念（term + context + complexity）
-2. 中/高复杂度 + 去重 → 自动 `add_item` 写入 `learning_queue.json`
-3. 前端 Learning 面板：待学 / 已学 / 已同步
+2. 边界检测：查知识库（BM25 + 可选 Chroma 向量）+ LLM 判定 known/unknown
+3. 未知概念写回知识库；中/高复杂度自动 `add_item` 入 `learning_queue.json`
+4. 前端 Learning 面板：待学 / 已学 / 已同步
 
 ---
 
@@ -382,10 +361,10 @@ engine.submit:
 
 | 项目 | 状态 |
 |------|------|
-| 四脑自动调度 | dev_explorer+dev_validator 已接入；knowledge_explorer 和 deploy_planner 未调度 |
-| Coordinator 流式 | `_run_brain` 用非流式 llm.chat，子 Agent 无进度展示 |
-| SegTree LLM 摘要 | `_merge_summaries_llm` 已实现但默认走模板拼接；未后台定时调度 |
-| Deploy 工具 | 5 个全部骨架——接口完整，实际逻辑空 |
+| 四脑 | 按需孵化的子 Agent 定义；无强制自动协调 |
+| Coordinator 流式 | 子 Agent 用非流式 llm.chat，无进度展示 |
+| SegTree LLM 摘要 | 模板合并为主（注入前兜底）；LLM 合并（summarize_dirty_background）可用但未自动触发 |
+| Deploy 工具 | Plan/Check/Run/List 已实现；Rollback 仅记录标记（无法自动逆向任意 shell，需手动） |
 | MCP 服务器 | .mcp.json 配置存在但 enabled:false |
-| 学习队列去重 | 按概念名精确匹配，未用 vector search 语义去重 |
-| 测试 | 122 单元测试，0 集成测试（Coordinator/SegTree/MCP/WS 多轮均无覆盖） |
+| 学习队列去重 | 按概念名精确匹配 + 知识库 BM25/向量边界检测 |
+| 测试 | 135 单元测试 + SegTree 随机对拍；WS/MCP 多轮仍无集成测试 |

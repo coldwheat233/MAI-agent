@@ -6,6 +6,7 @@ import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { api } from '@/lib/api'
+import { SERVER_URL } from '@/lib/constants'
 import {
   Plus, FolderPlus, ChevronRight, Folder, MessageSquare, Search, X,
   Trash2, PanelLeft, PanelLeftClose, GitBranch, BookOpen, Brain, Settings, GraduationCap,
@@ -56,7 +57,7 @@ export function Sidebar() {
     setSearching(true)
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`http://localhost:8765/api/sessions/search?q=${encodeURIComponent(q)}`)
+        const res = await fetch(`${SERVER_URL}/api/sessions/search?q=${encodeURIComponent(q)}`)
         if (res.ok) setSearchResults(await res.json())
       } catch { setSearchResults([]) }
       setSearching(false)
@@ -201,7 +202,7 @@ export function Sidebar() {
     e.preventDefault(); setDragOver(false)
     const file = e.dataTransfer.items[0]?.getAsFile()
     if (file) {
-      const path = (file as any).path
+      const path = window.electronAPI.getPathForFile(file)
       if (path) {
         try { await api.browseDirectory(path) } catch { return }
         await addWorkspace(path)

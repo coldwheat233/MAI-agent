@@ -149,6 +149,29 @@ def _ensure_config() -> Any:
     return _config
 
 
+def _current_cwd() -> str:
+    """当前活跃工作区路径。learning-queue 等端点的落盘目录需与 engine._detect_concepts
+    的 self.config.cwd 保持一致，否则自动捕获与面板读写两份 learning_queue.json。"""
+    return _ensure_config().project_root or os.getcwd()
+
+
+def _update_env(key: str, value: str) -> None:
+    """更新项目根 .env 中的某行（不存在则追加）。用于持久化模型/沙箱/模式设置。"""
+    env_path = Path(os.getcwd()) / ".env"
+    lines: list[str] = []
+    found = False
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines(keepends=True):
+            if line.startswith(f"{key}="):
+                lines.append(f"{key}={value}\n")
+                found = True
+            else:
+                lines.append(line)
+    if not found:
+        lines.append(f"{key}={value}\n")
+    env_path.write_text("".join(lines), encoding="utf-8")
+
+
 def init_engine(override_cwd: str = "") -> AgentEngine:
     """初始化引擎（不设全局——由 _init_engine_async 注册到 _engines）。"""
     global _config
@@ -348,8 +371,8 @@ async def websocket_endpoint(ws: WebSocket):
                 if last_user_idx >= 0:
                     del msgs[last_user_idx:]
                     await send_event({
-                        "type": "status",
-                        "message": f"已撤销最近一轮 ({len(msgs)} 条消息)",
+                        "type": "undo",
+                        "remaining": len(msgs),
                     })
                 else:
                     await send_event({
@@ -506,8 +529,11 @@ async def api_session_load(session_id: str):
     else:
         engine = await _get_engine()
 
-    # 确保 system prompt 反映当前工作区
-    engine._refresh_system_prompt()
+    # 取消该工作区的在途 submit——否则旧流继续推事件，会串进刚加载的会话视图
+    await _cancel_submit_for(_norm(engine.config.cwd or "."), timeout=1.0)
+
+    # 确保 system prompt 反映当前工作区（含 git subprocess，放线程池避免阻塞事件循环）
+    await asyncio.to_thread(engine._refresh_system_prompt)
     # Strip system messages — engine already has correct system prompt
     non_system = [m for m in messages if getattr(m, "role", "") != "system"]
     engine._messages = non_system
@@ -575,6 +601,11 @@ async def api_set_mode(data: dict):
     engine = await _get_engine()
     mode = data.get("mode", "auto")
     engine.set_mode(mode)
+    _ensure_config().permission_mode = mode
+    try:
+        _update_env("PERMISSION_MODE", mode)
+    except Exception:
+        pass
     return {"mode": mode}
 
 
@@ -596,6 +627,10 @@ async def api_set_sandbox(data: dict):
     if mode not in ("off", "default", "strict"):
         return JSONResponse({"error": "无效沙箱模式"}, 400)
     _ensure_config().sandbox_mode = mode
+    try:
+        _update_env("SANDBOX_MODE", mode)
+    except Exception:
+        pass
     if engine:
         engine._run_context.session_state = engine._init_session_state()
     return {"sandbox": mode}
@@ -769,7 +804,8 @@ async def api_learning_queue():
     """列出待学习队列。"""
     try:
         from mai_agent.knowledge.learning_queue import list_items, get_stats
-        return {"items": list_items(), "stats": get_stats()}
+        base = _current_cwd()
+        return {"items": list_items(base), "stats": get_stats(base)}
     except Exception:
         return {"items": [], "stats": {}}
 
@@ -785,6 +821,7 @@ async def api_learning_queue_add(data: dict):
         concept=concept,
         context=data.get("context", ""),
         priority=data.get("priority", "medium"),
+        base_dir=_current_cwd(),
     )
     return item
 
@@ -796,7 +833,7 @@ async def api_learning_queue_update(item_id: str, data: dict):
     updates = {k: v for k, v in data.items() if k in ("status", "notes", "priority", "feishu_doc_token")}
     if not updates:
         return JSONResponse({"error": "无有效更新字段"}, 400)
-    r = update_item(item_id, updates)
+    r = update_item(item_id, updates, _current_cwd())
     if r is None:
         return JSONResponse({"error": "Item not found"}, 404)
 
@@ -817,7 +854,7 @@ async def api_learning_queue_update(item_id: str, data: dict):
                 content += f"*自动同步自 MAI-agent 学习队列*"
                 doc_token = await client.create_doc(title=title, content=content)
                 if doc_token:
-                    update_item(item_id, {"status": "synced", "feishu_doc_token": doc_token})
+                    update_item(item_id, {"status": "synced", "feishu_doc_token": doc_token}, _current_cwd())
                     r["status"] = "synced"
                     r["feishu_doc_token"] = doc_token
         except Exception:
@@ -830,7 +867,7 @@ async def api_learning_queue_update(item_id: str, data: dict):
 async def api_learning_queue_delete(item_id: str):
     """从学习队列中移除一项。"""
     from mai_agent.knowledge.learning_queue import delete_item
-    ok = delete_item(item_id)
+    ok = delete_item(item_id, _current_cwd())
     if not ok:
         return JSONResponse({"error": "Item not found"}, 404)
     return {"deleted": True}
@@ -879,11 +916,15 @@ async def api_feishu_config(data: dict):
 @app.post("/api/model")
 async def api_set_model(data: dict):
     """切换模型并重新初始化引擎。"""
-    global _engine, _config
+    global _config
     model = data.get("model", "")
     if not model:
         return JSONResponse({"error": "模型名不能为空"}, 400)
     _ensure_config().llm_model = model
+    try:
+        _update_env("LLM_MODEL", model)
+    except Exception:
+        pass
     # 重建当前工作区引擎以应用新模型
     key = _norm(_config.project_root or ".")
     await _cancel_submit_for(key, timeout=3.0)

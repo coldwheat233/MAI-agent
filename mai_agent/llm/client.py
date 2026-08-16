@@ -118,9 +118,24 @@ class LLMClient:
         api_key: str = "",
         base_url: str = "https://api.deepseek.com/v1",
         model: str = "deepseek-v4-pro",
+        timeout: float = 300.0,
     ):
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # max_retries=0：禁用 SDK 内置重试，避免与 _retry_loop 的指数退避叠加成倍请求。
+        # timeout：显式超时，否则 SDK 默认 600s，单次挂起请求会阻塞近 10 分钟。
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,
+        )
         self.model = model
+
+    async def aclose(self) -> None:
+        """关闭底层 httpx 连接池。长生命周期实例（engine._llm）应在 stop 时调用。"""
+        try:
+            await self.client.close()
+        except Exception:
+            pass
 
     # ── 非流式调用 ─────────────────────────────────────────
 

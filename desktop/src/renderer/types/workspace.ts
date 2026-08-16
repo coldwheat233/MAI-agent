@@ -10,7 +10,7 @@ export interface WorkspaceInfo {
 
 export interface WorkspaceEntry {
   slug?: string
-  path?: string
+  path: string
   session_count?: number
   updated_at?: string
 }

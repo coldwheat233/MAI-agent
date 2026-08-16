@@ -61,6 +61,7 @@ class MCPClient:
         self._request_id = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._reader_task: Optional[asyncio.Task] = None
+        self._stderr_task: Optional[asyncio.Task] = None
         self._capabilities: dict[str, Any] = {}
         self._running = False
 
@@ -92,14 +93,30 @@ class MCPClient:
 
         self._running = True
         self._reader_task = asyncio.create_task(self._read_loop())
+        # 必须排空 stderr，否则 server 写满 ~64KB 管道缓冲会永久阻塞（经典 PIPE 死锁）
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
 
-        # Initialize 握手
-        result = await self._send_request("initialize", {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "MAI-agent", "version": "0.2.0"},
-        })
-        self._capabilities = result.get("capabilities", {})
+        try:
+            # Initialize 握手
+            result = await self._send_request("initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "MAI-agent", "version": "0.2.0"},
+            })
+            self._capabilities = result.get("capabilities", {})
+        except Exception:
+            # initialize 失败 → 清理进程与任务，避免泄漏
+            self._running = False
+            for t in (self._reader_task, self._stderr_task):
+                if t:
+                    t.cancel()
+            if self._process:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+                self._process = None
+            raise
 
         # 发送 initialized 通知
         await self._send_notification("notifications/initialized", {})
@@ -127,8 +144,10 @@ class MCPClient:
                     except json.JSONDecodeError:
                         logger.debug("MCP 非 JSON 输出: %s", line[:100])
                         continue
-                    # 处理响应或通知
-                    if "id" in msg and msg["id"] is not None:
+                    # 处理响应（有 id 且无 method）；服务端发来的 request（有 id+method）不当作响应，
+                    # 否则双方 id 都从 1 自增时会误取错结果 / 空结果
+                    if ("id" in msg and msg["id"] is not None
+                            and "method" not in msg):
                         fut = self._pending.pop(msg["id"], None)
                         if fut and not fut.done():
                             if "error" in msg:
@@ -140,6 +159,22 @@ class MCPClient:
             pass
         except Exception as exc:
             logger.error("MCP '%s' 读取错误: %s", self.config.name, exc)
+
+    async def _drain_stderr(self) -> None:
+        """持续排空 stderr，防止子进程写满管道缓冲而阻塞。"""
+        if not self._process or not self._process.stderr:
+            return
+        try:
+            while True:
+                chunk = await self._process.stderr.read(4096)
+                if not chunk:
+                    break
+                logger.debug("MCP '%s' stderr: %s", self.config.name,
+                             chunk.decode("utf-8", errors="replace").rstrip())
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
 
     async def _send_request(self, method: str, params: dict) -> dict:
         """发送 JSON-RPC 请求并等待响应。"""
@@ -211,12 +246,13 @@ class MCPClient:
     async def stop(self) -> None:
         """停止 MCP 服务器进程。"""
         self._running = False
-        if self._reader_task:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
+        for t in (self._reader_task, self._stderr_task):
+            if t:
+                t.cancel()
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
 
         if self._process:
             try:
@@ -231,6 +267,10 @@ class MCPClient:
                 await asyncio.wait_for(self._process.wait(), timeout=3.0)
             except asyncio.TimeoutError:
                 self._process.kill()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=3.0)
+                except Exception:
+                    pass
             self._process = None
 
 

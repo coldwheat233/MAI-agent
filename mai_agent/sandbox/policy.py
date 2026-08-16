@@ -255,3 +255,32 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def check_file_write(file_path: str, cwd: str, policy: Optional["SandboxPolicy"]) -> Optional[str]:
+    """检查 Write/Edit 的目标路径是否在沙箱允许范围内。
+
+    供 file_write / file_edit 工具在落盘前调用，使用当前 engine 的
+    RunContext.session_state["sandbox"] + cwd（按工作区隔离，而非全局状态）。
+
+    Returns:
+        违规原因字符串；None 表示放行。
+    """
+    if policy is None or not getattr(policy, "active", False):
+        return None
+    tgt = Path(file_path)
+    if not tgt.is_absolute():
+        tgt = Path(cwd) / tgt
+    tgt = tgt.resolve()
+    if str(tgt) in ("/dev/null", "NUL"):
+        return None
+
+    roots = [Path(cwd).resolve()]
+    for p in getattr(policy, "writable_paths", []) or []:
+        roots.append(Path(p).resolve())
+
+    for root in roots:
+        if _is_relative_to(tgt, root):
+            return None
+    allowed = ", ".join(str(r) for r in roots)
+    return f"沙箱拦截: 写入目标 '{file_path}' 不在允许路径内。允许范围: {allowed}"

@@ -12,6 +12,7 @@ const PYTHON_CMD = 'python'
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..')
 
 let pythonProcess: ChildProcess | null = null
+let stopping = false
 
 /** 返回后端启动命令。打包模式 spawn 自包含 backend.exe，开发模式 spawn 系统 Python。 */
 function backendCommand(): { cmd: string; args: string[]; cwd: string } {
@@ -35,6 +36,7 @@ function backendCommand(): { cmd: string; args: string[]; cwd: string } {
 
 export function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
+    stopping = false
     // Check if port already in use (previous session may still be running)
     http.get(`${SERVER_URL}/api/tools`, (res) => {
       if (res.statusCode === 200) {
@@ -80,6 +82,8 @@ export function startPythonBackend(): Promise<void> {
       })
 
       pythonProcess.on('exit', (code: number | null) => {
+        // 主动退出（stopPythonBackend 已置 stopping）时不再重启，避免孤儿进程
+        if (stopping) return
         if (code !== 0) {
           console.log(`[python] Process exited (code=${code}), retrying...`)
           setTimeout(() => startPythonBackend().catch(() => {}), 2000)
@@ -114,13 +118,16 @@ export function startPythonBackend(): Promise<void> {
 }
 
 export function stopPythonBackend() {
-  if (pythonProcess) {
-    pythonProcess.kill('SIGTERM')
+  stopping = true
+  const proc = pythonProcess
+  pythonProcess = null
+  if (proc) {
+    proc.kill('SIGTERM')
+    // 兜底 SIGKILL：捕获局部引用，之前的 bug 是先置 pythonProcess=null 再判断 → 永不触发
     setTimeout(() => {
-      if (pythonProcess && !pythonProcess.killed) {
-        pythonProcess.kill('SIGKILL')
+      if (!proc.killed) {
+        proc.kill('SIGKILL')
       }
     }, 3000)
-    pythonProcess = null
   }
 }

@@ -278,7 +278,8 @@ async def _do_extract(
         f"{EXTRACT_PROMPT}\n\n"
         f"--- EXISTING MEMORY ---\n{current_memory}\n--- END EXISTING ---\n\n"
         f"--- LATEST CONVERSATION ---\n{conv_text}\n--- END CONVERSATION ---\n\n"
-        f"Use the Write tool to update {MEMORY_FILE}. Append new sections, don't delete old ones."
+        f"Use the Write tool to write ONLY the new information from this conversation "
+        f"(2-3 bullet points). Do NOT repeat the existing memory above — it is preserved automatically."
     )
 
     llm = LLMClient(api_key=api_key, base_url=base_url, model=model)
@@ -310,8 +311,9 @@ async def _do_extract(
             args = _safe_json(tc.function.arguments if tc.function else "{}")
             content = args.get("content", "")
             if content:
-                _write_memory(project_root, content)
-                logger.info("Session memory updated (%d chars)", len(content))
+                # 追加式落盘——绝不整文件覆盖（覆盖会抹掉历史）
+                _append_memory(project_root, content)
+                logger.info("Session memory appended (%d chars)", len(content))
                 return content
 
     # Fallback: model returned text directly
@@ -346,12 +348,6 @@ async def manual_extract(
 # ── Helpers ───────────────────────────────────────────────
 
 
-def _write_memory(project_root: str, content: str) -> None:
-    path = memory_path(project_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-
-
 def _append_memory(project_root: str, content: str) -> None:
     path = memory_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -376,6 +372,12 @@ def _messages_to_text(messages: list[Message]) -> str:
 
 
 def _tool_schema(name: str, desc: str) -> dict:
+    if name == "Read":
+        properties = {"file_path": {"type": "string"}}
+        required = ["file_path"]
+    else:  # Write
+        properties = {"content": {"type": "string"}}
+        required = ["content"]
     return {
         "type": "function",
         "function": {
@@ -383,11 +385,8 @@ def _tool_schema(name: str, desc: str) -> dict:
             "description": desc,
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "file_path" if name == "Read" else "content": {"type": "string"},
-                    **({"content": {"type": "string"}} if name == "Write" else {}),
-                },
-                "required": ["file_path"] if name == "Read" else ["file_path", "content"],
+                "properties": properties,
+                "required": required,
             },
         },
     }

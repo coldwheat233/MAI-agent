@@ -5,6 +5,7 @@ import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { Modal } from '@/components/common/Modal'
 import type { Theme, Language } from '@/types'
 import { FolderOpen } from 'lucide-react'
+import { SERVER_URL } from '@/lib/constants'
 
 export function SettingsModal() {
   const open = useUIStore((s) => s.isSettingsOpen)
@@ -134,7 +135,7 @@ function FeishuSection() {
     setSaving(true)
     setMsg('')
     try {
-      const res = await fetch('http://localhost:8765/api/feishu/config', {
+      const res = await fetch(`${SERVER_URL}/api/feishu/config`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ app_id: editAppId.trim(), app_secret: editSecret.trim() }),
