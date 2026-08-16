@@ -10,6 +10,7 @@ export type ServerEvent =
   | DoneEvent
   | ErrorEvent
   | StatusEvent
+  | UndoEvent
   | WorkspaceSwitchedEvent
 
 export interface ReadyEvent {
@@ -67,6 +68,11 @@ export interface ErrorEvent {
 export interface StatusEvent {
   type: 'status'
   message: string
+}
+
+export interface UndoEvent {
+  type: 'undo'
+  remaining: number
 }
 
 export interface WorkspaceSwitchedEvent {

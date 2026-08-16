@@ -85,22 +85,29 @@ class TaggedMemory:
 
 # ── MemorySegTree 集成 ─────────────────────────────────────
 
-_tree: Any = None  # Optional MemorySegTree, 延迟初始化
+_trees: dict[str, Any] = {}  # resolved project_root → MemorySegTree（多工作区隔离）
+
+
+def _tree_key(project_root: str) -> str:
+    return str(Path(project_root).resolve())
 
 
 def init_tree(project_root: str = ".") -> Any:
-    """初始化记忆线段树（尝试加载或从零构建）。"""
-    global _tree
+    """初始化某工作区的记忆线段树（尝试加载或从零构建，按工作区缓存）。"""
+    key = _tree_key(project_root)
+    if key in _trees:
+        return _trees[key]
     from mai_agent.services.memory_segtree import MemorySegTree
-    _tree = MemorySegTree(project_root)
-    if not _tree.load():
+    tree = MemorySegTree(project_root)
+    if not tree.load():
         # segments.json 不存在或损坏 → 从现有卡片构建
         memories = load_all_memories(project_root)
         if memories:
-            _tree.cards = [m.name for m in sorted(memories, key=lambda m: m.created_at)]
-            _tree.card_dates = [_parse_date(m.created_at) for m in sorted(memories, key=lambda m: m.created_at)]
-            _tree.build()
-    return _tree
+            tree.cards = [m.name for m in sorted(memories, key=lambda m: m.created_at)]
+            tree.card_dates = [_parse_date(m.created_at) for m in sorted(memories, key=lambda m: m.created_at)]
+            tree.build()
+    _trees[key] = tree
+    return tree
 
 
 def _parse_date(s: str) -> Any:
@@ -112,31 +119,33 @@ def _parse_date(s: str) -> Any:
         return _date.today()
 
 
-def get_tree(refresh: bool = False) -> Any:
-    """获取当前 MemorySegTree 实例（None 表示未初始化或不可用）。"""
-    global _tree
-    if refresh and _tree:
-        _tree.build()  # 从当前 cards 重建
-    return _tree
+def get_tree(project_root: str = ".", refresh: bool = False) -> Any:
+    """获取指定工作区的 MemorySegTree 实例（None 表示未初始化或不可用）。"""
+    tree = _trees.get(_tree_key(project_root))
+    if refresh and tree:
+        tree.build()  # 从当前 cards 重建
+    return tree
 
 
 def _maybe_insert_tree(name: str, description: str, tags: list[str],
                        created_at: str, project_root: str = ".") -> None:
-    """如果 segtree 可用，插入卡片。"""
-    if _tree is None:
+    """如果该工作区的 segtree 可用，插入卡片。"""
+    tree = get_tree(project_root)
+    if tree is None:
         return
     try:
-        _tree.insert(name, _parse_date(created_at), description, tags)
+        tree.insert(name, _parse_date(created_at), description, tags)
     except Exception as exc:
         logger.debug("segtree insert 失败: %s", exc)
 
 
-def _maybe_remove_tree(name: str) -> None:
-    """如果 segtree 可用，删除卡片。"""
-    if _tree is None:
+def _maybe_remove_tree(name: str, project_root: str = ".") -> None:
+    """如果该工作区的 segtree 可用，删除卡片。"""
+    tree = get_tree(project_root)
+    if tree is None:
         return
     try:
-        _tree.remove(name)
+        tree.remove(name)
     except Exception as exc:
         logger.debug("segtree remove 失败: %s", exc)
 
@@ -252,7 +261,7 @@ def delete_memory(name: str, project_root: str = ".") -> bool:
         return False
     path.unlink()
     rebuild_index(project_root)
-    _maybe_remove_tree(name)
+    _maybe_remove_tree(name, project_root)
     return True
 
 
@@ -296,9 +305,10 @@ def load_tag_index(project_root: str = ".") -> dict[str, list[str]]:
 
 def search_by_tag(tag: str, project_root: str = ".") -> list[TaggedMemory]:
     """按标签检索记忆。优先用 segtree (O(log n))，无树时降级为 tags.json (O(n))。"""
-    # 优先 segtree
-    if _tree is not None:
-        names = _tree.query_by_tag(tag)
+    # 优先 segtree（上限放宽，避免默认 50 静默截断同 tag 大量卡片）
+    tree = get_tree(project_root)
+    if tree is not None:
+        names = tree.query_by_tag(tag, max_results=10000)
         results = [load_memory_by_name(n, project_root) for n in names]
         return [m for m in results if m is not None]
 
@@ -318,11 +328,40 @@ def search_by_type(mem_type: str, project_root: str = ".") -> list[TaggedMemory]
     return [m for m in load_all_memories(project_root) if m.type == mem_type]
 
 
+def search_by_daterange(start: Optional[str], end: Optional[str],
+                        tag: Optional[str] = None, project_root: str = ".") -> list[TaggedMemory]:
+    """按日期区间检索（优先 segtree 的双剪枝，降级为全量扫描）。"""
+    s = _parse_date(start) if start else None
+    e = _parse_date(end) if end else None
+    tree = get_tree(project_root)
+    if tree is not None:
+        from datetime import date as _date
+        lo = s or _date.min
+        hi = e or _date.max
+        names = tree.query_by_daterange(lo, hi, tag=tag, max_results=99999)
+        results = [load_memory_by_name(n, project_root) for n in names]
+        return [m for m in results if m is not None]
+
+    # 降级：全量扫描
+    result: list[TaggedMemory] = []
+    for m in load_all_memories(project_root):
+        if tag and tag not in m.tags:
+            continue
+        d = _parse_date(m.created_at)
+        if s and d < s:
+            continue
+        if e and d > e:
+            continue
+        result.append(m)
+    return result
+
+
 def search(query: str, project_root: str = ".") -> list[TaggedMemory]:
     """简单全文检索：优先用 segtree，无树时全量扫描。"""
     # 优先 segtree
-    if _tree is not None:
-        names = _tree.fuzzy_search(query)
+    tree = get_tree(project_root)
+    if tree is not None:
+        names = tree.fuzzy_search(query)
         results = [load_memory_by_name(n, project_root) for n in names]
         return [m for m in results if m is not None]
 
@@ -387,14 +426,23 @@ def tagged_memory_context(project_root: str = ".", max_items: int = 30) -> str:
     放在 system prompt 末尾以保持前缀稳定（KV Cache 友好）。
     """
     # 优先 segtree
-    if _tree is not None and _tree.root is not None:
-        root = _tree.root
+    tree = get_tree(project_root)
+    if tree is not None and tree.root is not None:
+        root = tree.root
+        # 注入前兜底：summary 为空时用模板拼接补齐（无 LLM、确定性、仅内存操作），
+        # 保证「共 N 条记忆 + 概览」永不空。LLM 版摘要合并（summarize_dirty_background）
+        # 保持为可选增强，不自动触发（避免每轮 submit 产生 LLM 开销 + 与模板兜底抢 dirty）。
+        if not root.summary and root.card_count > 0:
+            try:
+                tree.force_summarize_all()
+            except Exception:
+                pass
         lines = ["[Memory — 用 MemorySearch 按需获取详情]"]
         lines.append(f"共 {root.card_count} 条记忆。{root.summary}" if root.summary
                      else f"共 {root.card_count} 条记忆。")
 
         # 活跃主题
-        recent = _tree.recent_topics(months=3, max_topics=8)
+        recent = tree.recent_topics(months=3, max_topics=8)
         if recent:
             lines.append(f"近期主题: {', '.join(recent)}")
         lines.append("[End Memory]")

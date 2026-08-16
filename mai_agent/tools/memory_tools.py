@@ -78,6 +78,8 @@ class MemorySearchInput(ToolInput):
     query: Optional[str] = Field(default=None, description="全文检索关键词")
     tag: Optional[str] = Field(default=None, description="按标签精确检索")
     type: Optional[str] = Field(default=None, description="按类型检索: user|feedback|project|reference")
+    start: Optional[str] = Field(default=None, description="起始日期（YYYY-MM-DD，含）")
+    end: Optional[str] = Field(default=None, description="结束日期（YYYY-MM-DD，含）")
 
 
 class MemorySearchTool(Tool):
@@ -90,7 +92,10 @@ class MemorySearchTool(Tool):
     async def call(self, input: MemorySearchInput, context: RunContext) -> str:
         root = _root(context)
 
-        if input.tag:
+        if input.start or input.end:
+            results = memory_tags.search_by_daterange(
+                input.start, input.end, input.tag, root)
+        elif input.tag:
             results = memory_tags.search_by_tag(input.tag, root)
         elif input.type:
             results = memory_tags.search_by_type(input.type, root)

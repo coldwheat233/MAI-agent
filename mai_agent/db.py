@@ -46,6 +46,10 @@ GLOBAL_MAI_DIR = Path.home() / ".mai"
 DB_PATH = GLOBAL_MAI_DIR / "mai.db"
 
 _conn_lock = threading.Lock()
+# 所有连接访问（读+写）的串行化锁。save_session 走 asyncio.to_thread 线程池，
+# 多个工作区并发保存时会在同一 _conn 上各自 BEGIN IMMEDIATE → 嵌套事务崩溃。
+# RLock 可重入，_session_title 等在持锁函数内再访问连接也安全。
+_db_lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
 
 
@@ -77,16 +81,17 @@ def get_conn() -> sqlite3.Connection:
 
 @contextmanager
 def transaction() -> Iterator[sqlite3.Connection]:
-    """with transaction(): ... — 自动 BEGIN / COMMIT / ROLLBACK。"""
-    conn = get_conn()
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield conn
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    else:
-        conn.execute("COMMIT")
+    """with transaction(): ... — 自动 BEGIN / COMMIT / ROLLBACK（跨线程串行化）。"""
+    with _db_lock:
+        conn = get_conn()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        else:
+            conn.execute("COMMIT")
 
 
 # ── Schema ──────────────────────────────────────────────
@@ -307,13 +312,14 @@ def unregister_workspace(cwd: str) -> None:
 
 
 def list_workspaces() -> list[dict[str, Any]]:
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT w.path, w.slug, w.last_used, w.created_at,"
-        "       (SELECT COUNT(*) FROM sessions s WHERE s.workspace_path = w.path) AS session_count"
-        " FROM workspaces w"
-        " ORDER BY COALESCE(w.last_used, '') DESC, w.created_at DESC"
-    ).fetchall()
+    with _db_lock:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT w.path, w.slug, w.last_used, w.created_at,"
+            "       (SELECT COUNT(*) FROM sessions s WHERE s.workspace_path = w.path) AS session_count"
+            " FROM workspaces w"
+            " ORDER BY COALESCE(w.last_used, '') DESC, w.created_at DESC"
+        ).fetchall()
     result = []
     for r in rows:
         result.append({
@@ -374,16 +380,17 @@ def save_session(
 
 def load_session(session_id: str, project_root: str = ".") -> Optional[list[Message]]:
     """按 id 加载 session 的 messages（不依赖 cwd——文件被 SQL 索引后全局唯一）。"""
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT id FROM sessions WHERE id = ?", (session_id,)
-    ).fetchone()
-    if row is None:
-        return None
-    rows = conn.execute(
-        "SELECT role, content, tool_calls, tool_call_id, name FROM messages"
-        " WHERE session_id = ? ORDER BY position ASC", (session_id,)
-    ).fetchall()
+    with _db_lock:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT id FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        rows = conn.execute(
+            "SELECT role, content, tool_calls, tool_call_id, name FROM messages"
+            " WHERE session_id = ? ORDER BY position ASC", (session_id,)
+        ).fetchall()
     msgs = [_row_to_msg(r) for r in rows]
     # 清理半截 tool_calls
     try:
@@ -395,10 +402,11 @@ def load_session(session_id: str, project_root: str = ".") -> Optional[list[Mess
 
 
 def get_session_workspace(session_id: str, project_root: str = ".") -> Optional[str]:
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT workspace_path FROM sessions WHERE id = ?", (session_id,)
-    ).fetchone()
+    with _db_lock:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT workspace_path FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
     if row is None:
         return None
     return row["workspace_path"]
@@ -419,41 +427,43 @@ def _session_title(conn: sqlite3.Connection, session_id: str) -> str:
 def list_sessions(project_root: str = ".") -> list[dict[str, Any]]:
     """当前 workspace 的所有 session（按 updated_at desc）。"""
     workspace_path = str(Path(project_root).resolve())
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT id, message_count, updated_at FROM sessions"
-        " WHERE workspace_path = ? ORDER BY updated_at DESC",
-        (workspace_path,),
-    ).fetchall()
-    return [
-        {
-            "session_id": r["id"],
-            "message_count": r["message_count"],
-            "updated_at": r["updated_at"] or "",
-            "title": _session_title(conn, r["id"]),
-        }
-        for r in rows
-    ]
+    with _db_lock:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT id, message_count, updated_at FROM sessions"
+            " WHERE workspace_path = ? ORDER BY updated_at DESC",
+            (workspace_path,),
+        ).fetchall()
+        return [
+            {
+                "session_id": r["id"],
+                "message_count": r["message_count"],
+                "updated_at": r["updated_at"] or "",
+                "title": _session_title(conn, r["id"]),
+            }
+            for r in rows
+        ]
 
 
 def delete_session(session_id: str, project_root: str = ".") -> bool:
-    conn = get_conn()
-    cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-    return cur.rowcount > 0
+    with transaction() as c:
+        cur = c.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        return cur.rowcount > 0
 
 
 def search_sessions(keyword: str, project_root: str = ".") -> list[dict[str, Any]]:
     """跨所有 workspace 按 keyword 搜 messages.content。"""
     kw = keyword.lower()
-    conn = get_conn()
-    rows = conn.execute(
-        "SELECT s.id, s.message_count, s.updated_at, s.workspace_path,"
-        "       m.content, m.position"
-        " FROM sessions s JOIN messages m ON m.session_id = s.id"
-        " WHERE LOWER(IFNULL(m.content, '')) LIKE ?"
-        " ORDER BY s.updated_at DESC, m.position ASC",
-        (f"%{kw}%",),
-    ).fetchall()
+    with _db_lock:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT s.id, s.message_count, s.updated_at, s.workspace_path,"
+            "       m.content, m.position"
+            " FROM sessions s JOIN messages m ON m.session_id = s.id"
+            " WHERE LOWER(IFNULL(m.content, '')) LIKE ?"
+            " ORDER BY s.updated_at DESC, m.position ASC",
+            (f"%{kw}%",),
+        ).fetchall()
     by_session: dict[str, dict[str, Any]] = {}
     for r in rows:
         sid = r["id"]
@@ -477,16 +487,18 @@ def search_sessions(keyword: str, project_root: str = ".") -> list[dict[str, Any
                 snippet = snippet + "..."
             by_session[sid]["matches"].append(snippet)
     # 补充标题（首条 user 消息）
-    for sid in by_session:
-        by_session[sid]["title"] = _session_title(conn, sid)
+    with _db_lock:
+        for sid in by_session:
+            by_session[sid]["title"] = _session_title(conn, sid)
     return list(by_session.values())
 
 
 def get_session_message_count(session_id: str) -> int:
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT message_count FROM sessions WHERE id = ?", (session_id,)
-    ).fetchone()
+    with _db_lock:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT message_count FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
     return row["message_count"] if row else 0
 
 

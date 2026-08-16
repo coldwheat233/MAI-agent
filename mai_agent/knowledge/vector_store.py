@@ -280,3 +280,21 @@ class KnowledgeStore:
             except Exception:
                 return 0
         return len(self._bm25._ids)
+
+
+# ── 单例缓存 ─────────────────────────────────────────────
+
+_stores: dict[str, "KnowledgeStore"] = {}
+
+
+def get_store(persist_dir: str = ".mai/chroma", embedding_backend=None) -> "KnowledgeStore":
+    """按 persist_dir 缓存的 KnowledgeStore（保持 BM25 索引跨调用持久）。
+
+    engine._detect_concepts 每次 submit 都会触发，若每次 new 一个 store，BM25 索引
+    会随实例一起丢失，边界检测退化为"永远未知"。缓存后 BM25 跨调用累积。
+    """
+    if persist_dir not in _stores:
+        _stores[persist_dir] = KnowledgeStore(
+            persist_dir=persist_dir, embedding_backend=embedding_backend,
+        )
+    return _stores[persist_dir]

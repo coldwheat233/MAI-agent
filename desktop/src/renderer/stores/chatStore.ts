@@ -32,6 +32,7 @@ interface ChatState {
   handleError: (message: string) => void
   clearMessages: () => void
   setMessages: (msgs: ChatMessage[]) => void
+  trimToLastUserMessage: () => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -77,6 +78,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   startThinking: () => {
+    const { streamingMsgId } = get()
+    if (streamingMsgId) {
+      // 已有流式 assistant：只补 thinking 标记，不再新建气泡。
+      // 避免后端 submit 与 loop 各发一次 thinking 时产生孤儿空 assistant 消息。
+      set((s) => ({
+        messages: s.messages.map((m) =>
+          m.id === streamingMsgId ? { ...m, isThinking: true } : m
+        ),
+      }))
+      return
+    }
     const id = genId()
     const msg: ChatMessage = {
       id,
@@ -125,14 +137,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   finishTool: (name, result, isError) => {
     const { streamingMsgId } = get()
+    let matched = false
     set((s) => ({
       messages: s.messages.map((m) => {
         if (m.id !== streamingMsgId || !m.toolCalls) return m
         return {
           ...m,
           toolCalls: m.toolCalls.map((tc) => {
-            // Update the first matching running tool
-            if (tc.name === name && tc.status === 'running') {
+            // 只更新第一个同名 running 工具（并发多个 Read/Grep 时不再串写所有卡片）
+            if (!matched && tc.name === name && tc.status === 'running') {
+              matched = true
               return { ...tc, result, isError, status: isError ? 'error' : 'ok' }
             }
             return tc
@@ -176,4 +190,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   clearMessages: () =>
     set({ messages: [], isStreaming: false, streamingMsgId: null }),
   setMessages: (msgs) => set({ messages: msgs }),
+
+  trimToLastUserMessage: () => {
+    // 与后端 /undo 语义一致：删掉最后一条 user 消息及其之后的所有内容
+    set((s) => {
+      let lastUser = -1
+      for (let i = s.messages.length - 1; i >= 0; i--) {
+        if (s.messages[i].role === 'user') {
+          lastUser = i
+          break
+        }
+      }
+      if (lastUser < 0) return s
+      return {
+        messages: s.messages.slice(0, lastUser),
+        isStreaming: false,
+        streamingMsgId: null,
+      }
+    })
+  },
 }))

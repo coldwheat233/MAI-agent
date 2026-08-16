@@ -113,7 +113,7 @@ def test_build_5_non_power_of_two(temp_dir):
 
     assert tree.root is not None
     assert tree.root.card_count == 5
-    assert tree.root.R == 5  # exact cover, virtual nodes collapsed
+    assert tree.root.R == 8  # padded to next power of two; [5,8) 为虚拟叶子
 
 
 def test_build_all_nodes_dirty(temp_dir):
@@ -160,9 +160,9 @@ def test_insert_maintains_order(temp_dir):
 
     assert pos == 1  # between a and b
     assert tree.cards == ["a", "c", "b"]
-    assert tree._real_index("a") == 0
-    assert tree._real_index("c") == 1
-    assert tree._real_index("b") == 2
+    assert tree._card_index["a"] == 0
+    assert tree._card_index["c"] == 1
+    assert tree._card_index["b"] == 2
 
 
 def test_insert_triggers_expansion(temp_dir):
@@ -344,10 +344,8 @@ def test_remove_rebuilds_index(temp_dir):
 
     tree.remove("b")
     # Card indices should be correct after remove triggers rebuild
-    idx_a = tree._real_index("a")
-    idx_c = tree._real_index("c")
-    assert tree.cards[idx_a] == "a"
-    assert tree.cards[idx_c] == "c"
+    assert tree._card_index["a"] == 0
+    assert tree._card_index["c"] == 1
 
 
 # ── Phase 2: query tests ────────────────────────────────
@@ -616,3 +614,55 @@ def test_node_info_single_date(temp_dir):
     ])
     info = MemorySegTree._node_info(tree.root)
     assert "2026-03" in info
+
+
+def test_randomized_differential():
+    """随机对拍：insert/remove 后不变量 + tag/date 查询与朴素暴力一致。
+
+    覆盖追加/中间插入/删除的混合路径，防止 O(log n) 懒更新回归。
+    """
+    import random
+    from datetime import date as _date, timedelta
+    from tempfile import TemporaryDirectory
+
+    rng = random.Random(20260811)
+    tags_pool = ['redis', 'distributed', 'web', 'rust', 'db', 'k8s']
+
+    with TemporaryDirectory() as tmp:
+        tree = MemorySegTree(tmp)
+        topics_by_name: dict[str, list[str]] = {}
+        # 去磁盘 IO：mock 掉文件读（不改被测树逻辑）
+        tree._read_card_topics = lambda name: set(topics_by_name.get(name, set()))
+        tree._card_has_tag = lambda name, tag: tag in topics_by_name.get(name, set())
+
+        model: list[dict] = []
+        for step in range(500):
+            if rng.random() < 0.75 or not model:
+                name = f"card{step}"
+                if model and rng.random() < 0.85:
+                    d = model[-1]['date'] + timedelta(days=rng.randint(0, 30))  # 追加为主
+                else:
+                    d = _date(2024, 1, 1) + timedelta(days=rng.randint(0, 2000))  # 偶尔中间
+                tags = rng.sample(tags_pool, rng.randint(0, 3))
+                topics_by_name[name] = tags
+                tree.insert(name, d, name, tags)
+                model.append({'name': name, 'date': d, 'tags': set(tags)})
+                model.sort(key=lambda x: x['date'])
+            else:
+                victim = rng.choice(model)
+                tree.remove(victim['name'])
+                model = [m for m in model if m['name'] != victim['name']]
+
+            assert tree.verify() == []
+            assert tree.cards == [m['name'] for m in model]
+            for tag in tags_pool:
+                got = set(tree.query_by_tag(tag, max_results=99999))
+                want = {m['name'] for m in model if tag in m['tags']}
+                assert got == want, f"step {step} tag={tag} got={got} want={want}"
+
+            if model:
+                d1 = _date(2024, 1, 1) + timedelta(days=rng.randint(0, 1500))
+                d2 = d1 + timedelta(days=rng.randint(0, 500))
+                got = set(tree.query_by_daterange(d1, d2, max_results=99999))
+                want = {m['name'] for m in model if d1 <= m['date'] <= d2}
+                assert got == want, f"step {step} range got={got} want={want}"

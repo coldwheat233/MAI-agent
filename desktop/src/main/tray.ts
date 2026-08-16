@@ -12,7 +12,7 @@ export function createTray() {
   try {
     const trayIconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png')
     // Fallback: create a small 16x16 icon programmatically if file doesn't exist
-    let icon: nativeImage
+    let icon: Electron.NativeImage
     if (fs.existsSync(trayIconPath)) {
       icon = nativeImage.createFromPath(trayIconPath)
     } else {

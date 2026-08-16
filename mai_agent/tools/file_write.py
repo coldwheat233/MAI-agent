@@ -36,6 +36,14 @@ class FileWriteTool(Tool):
 
     async def call(self, input: FileWriteInput, context: RunContext) -> str:
         path = resolve_path(input.file_path, context.cwd)
+
+        # 沙箱写路径检查：按当前 engine 的 session_state（多工作区隔离），非全局状态
+        from mai_agent.sandbox.policy import check_file_write
+        reason = check_file_write(input.file_path, context.cwd,
+                                  context.session_state.get("sandbox"))
+        if reason:
+            return f"[ERROR] {reason}"
+
         snap_id = save_snapshot(str(path), context.cwd) if path.exists() else ""
 
         path.parent.mkdir(parents=True, exist_ok=True)

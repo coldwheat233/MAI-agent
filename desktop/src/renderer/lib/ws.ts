@@ -21,7 +21,7 @@ export function createWSHandler(stores: {
 
     switch (event.type) {
       case 'ready': {
-        if (event.model) settingsStore.setModel(event.model)
+        if (event.model) settingsStore.setModelFromServer(event.model)
         if (event.tools) toolStore.setTools(event.tools)
         // 同步后端引擎的 session_id — 之前前端 currentSessionId 永远停在 'default'，
         // 导致新引擎的 session 无法在侧边栏高亮/标记为"当前会话"。
@@ -64,6 +64,10 @@ export function createWSHandler(stores: {
           if (event.session_id) sessionStore.setCurrentSessionId(event.session_id)
           stores.sessionStore.fetchSessions()
         }
+        break
+      }
+      case 'undo': {
+        chatStore.trimToLastUserMessage()
         break
       }
       case 'status': {

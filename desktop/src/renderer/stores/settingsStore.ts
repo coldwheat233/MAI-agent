@@ -15,6 +15,7 @@ interface SettingsState {
 
   // Actions
   setModel: (model: string) => void
+  setModelFromServer: (model: string) => void
   setPermission: (mode: Permission) => void
   setTheme: (theme: Theme) => void
   setLanguage: (lang: Language) => void
@@ -36,6 +37,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     // Also persist + sync to backend
     localStorage.setItem('mai-model', model)
     api.setModel(model).catch(() => {})
+  },
+
+  setModelFromServer: (model) => {
+    // 后端 ready 回显当前 model：只更新本地显示，不回 POST /api/model。
+    // 否则每次 WS 连接/重连都会触发 /api/model → 重建引擎 → 换新 session_id，丢上下文。
+    set({ model })
+    localStorage.setItem('mai-model', model)
   },
 
   setPermission: (mode) => {

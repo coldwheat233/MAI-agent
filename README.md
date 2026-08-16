@@ -3,7 +3,7 @@
 > 个人 AI 开发 Agent 平台 — Python 复刻 Claude Code 架构 + Electron/React 桌面端
 
 ```
-~13,400 lines Python  |  49 tools  |  122 tests  |  DeepSeek v4-pro  |  asyncio + FastAPI + WebSocket
+~9,900 lines Python  |  49 tools  |  135 tests  |  DeepSeek v4-pro  |  asyncio + FastAPI + WebSocket
  Electron 33 + React 18 + Zustand 4.5 + Tailwind CSS 3  |  TypeScript 5.5 + Vite 5
 ```
 
@@ -21,7 +21,7 @@
 
 ```bash
 # 后端依赖
-pip install httpx click rich python-dotenv pydantic pydantic-settings openai
+pip install httpx click rich python-dotenv pydantic pydantic-settings openai fastapi "uvicorn[standard]"
 
 # 可选：知识引擎
 pip install chromadb sentence-transformers
@@ -51,7 +51,7 @@ FEISHU_APP_SECRET=xxx
 
 ```bash
 # 后端 API 服务器（含 WebSocket）
-python -m mai_agent.cli serve --port 8765
+python -m mai_agent.cli --serve --port 8765
 
 # 桌面端开发模式
 cd desktop && npm run dev
@@ -66,10 +66,10 @@ cd desktop && npm run package
 ### CLI 模式
 
 ```bash
-python main.py                    # 交互式 REPL
-python main.py --once "任务"      # 单次执行
-python main.py --plan             # 只读 Plan 模式
-python main.py --session my-id    # 指定会话
+python -m mai_agent.cli                      # 交互式 REPL
+python -m mai_agent.cli --once "任务"        # 单次执行
+python -m mai_agent.cli --plan               # 只读 Plan 模式
+python -m mai_agent.cli --session my-id      # 指定会话
 ```
 
 REPL 命令：
@@ -217,7 +217,7 @@ mai_agent/
 │   ├── types.py           # Hook 类型定义
 │   └── builtins.py        # 内置 Hook
 ├── brains/
-│   ├── coordinator.py     # 四脑协调器 — EXPLORING→VALIDATING→COMPLETED 状态机
+│   ├── coordinator.py     # 四脑子 Agent 定义与状态（按需孵化，状态机为历史遗留）
 │   └── definitions.py    # 脑定义
 ├── knowledge/
 │   ├── concept_detector.py # 概念边界检测
@@ -316,7 +316,7 @@ http://localhost:8765
 | `POST` | `/api/workspace` | 切换工作区 `{ "cwd": "/path/to/project" }` 并重启引擎 |
 | `GET` | `/api/git` | 当前工作区 Git 状态 (分支、改动、最近提交) |
 | `GET` | `/api/browse?path=` | 浏览文件系统目录 (工作区选择器) |
-| `GET` | `/api/coordinator` | 获取四脑协调器当前状态 |
+| `GET` | `/api/coordinator` | 获取当前激活的脑状态 |
 | `GET` | `/api/feishu/status` | 检查飞书配置状态 |
 | `POST` | `/api/feishu/config` | 保存飞书配置到 .env `{ "app_id", "app_secret" }` |
 | `GET` | `/api/learning-queue` | 列出待学习队列及统计 |
@@ -372,18 +372,17 @@ http://localhost:8765
 | 其他 | `TodoWrite`, `SendMessage`, `AskUserQuestion`, `Skill`, `Workflow` | 任务清单、Agent 通信、用户询问、Skill 调用、工作流 |
 | MCP | `MCPTool` | MCP 协议工具包装 |
 
-### 四脑协作
+### 四脑（按需孵化的子 Agent）
 
-```
-EXPLORING (探索) → VALIDATING (验证) → COMPLETED (完成)
-                        ↓                    ↑
-                   BLOCKED (阻塞) ─── 人工干预后恢复
-```
+四个脑是预定义的子 Agent 定义（`brains/definitions.py`），主 Agent 在需要时通过 `Agent` 工具**按需孵化**，
+不再有强制 explore→validate 前置协调器——意图识别交给模型的 tool-call 自然决定，避免前置分类器的重复劳动与上下文膨胀。
 
-- **Explorer Brain**: 信息收集、文件搜索、代码阅读
-- **Validator Brain**: 代码审查、安全校验、结果验证
-- **Knowledge Brain**: 知识库查询、概念检测、学习触发
-- **Deploy Brain**: 部署检查、计划生成、执行与回滚
+- **dev_explorer**（探索者）: 需求拆解、生成测试清单
+- **dev_validator**（验证者）: 运行测试、验证逻辑闭合
+- **knowledge_explorer**（知识探索）: 识别未知概念、复杂度评估
+- **deploy_planner**（部署规划）: 部署方案规划
+
+每个脑有独立的 System Prompt + 工具白名单（`AgentDefinition.allowed_tools`）。
 
 ### Skill 系统
 
@@ -411,24 +410,24 @@ EXPLORING (探索) → VALIDATING (验证) → COMPLETED (完成)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  Layer 1 — 流水摘要 (memory.py, 417 行)                              │
+│  Layer 1 — 流水摘要 (memory.py)                                      │
 │    何时提取：双重阈值 (token delta ≥ 500) AND (tool calls ≥ 3)        │
 │             AND last turn has no pending tool_calls (safe window)   │
 │    并发控制：asyncio.Lock + 60s stale force-release                  │
 │    触发时机：PostSamplingHook（每次 LLM 响应后评估，嵌主循环）         │
 │    产物：SESSION_MEMORY.md（时间线，[YYYY-MM-DD HH:MM] 格式追加）    │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Layer 2 — 线段树索引 (memory_segtree.py, 748 行)                     │
+│  Layer 2 — 线段树索引 (memory_segtree.py)                             │
 │    数据结构：自建 SegNode (L/R, summary, topics set, dirty, dates)   │
-│    懒标记：dirty → LLM 合并左右子树摘要（_push_down_async）         │
+│    懒标记：dirty → 摘要下推合并（模板为主，LLM 版可选）              │
 │    剪枝：内部节点存 topics 并集（tag 查询子树跳过）                  │
 │          earliest_date/latest_date（区间查询双剪枝）                 │
-│    插入优化：_batch_shifts 延迟 O(n) 全量更新（>100 次才压缩+重建）  │
+│    插入：追加走根→叶路径 O(log n)，树满才翻倍重建（摊还 O(1)）      │
 │    查询：query_by_tag / query_by_daterange / fuzzy_search            │
-│    不变量：verify() 跑 root cover / card_count / 叶子边界检查        │
+│    不变量：verify() 跑 root cover / 子树卡数 / topics 并集一致性     │
 │    持久化：.mai/memory/segments.json（JSON dump 整棵子树）           │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Layer 3 — 标签卡片 + WikiLink (memory_tags.py, 415 行)               │
+│  Layer 3 — 标签卡片 + WikiLink (memory_tags.py)                       │
 │    存储：每条记忆一个 .md 文件 + YAML frontmatter                    │
 │           (name / description / type ∈ {user,feedback,project,ref})│
 │    关联：正文用 [[name]] wiki-link 建立概念图（双向图结构）          │
@@ -438,7 +437,7 @@ EXPLORING (探索) → VALIDATING (验证) → COMPLETED (完成)
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-设计意图：流水层管"时序"，线段树层管"高效区间+标签检索"，卡片层管"用户可读+可编辑"。**三层互不污染**——流水的脏数据不会污染卡片；卡片的删除不会触发线段树 dirty。
+设计意图：流水层管"时序"，线段树层管"高效区间+标签检索"，卡片层管"用户可读+可编辑"。**三层互不污染**——流水的脏数据不会污染卡片；卡片层与线段树层通过写路径（save_memory/delete_memory）同步维护。
 
 ### 知识引擎
 
@@ -550,7 +549,7 @@ Claude Code 的并发/串行分区：
 | **Diff 显示** | 代码 diff 高亮 | +/- 逐行对比 |
 | **文件快照** | 编辑前自动备份 | .mai/snapshots/ |
 | **会话记忆** | 双重阈值 + postSamplingHook | 同 + asyncio.Lock + stale 保护 + 分段树索引 + 标签 |
-| **Agent 孵化** | AgentTool + forked subagent | 同 + 四脑 Coordinator |
+| **Agent 孵化** | AgentTool + forked subagent | 同 + 按需孵化的四脑子 Agent |
 | **MCP** | 完整支持 | 支持 (MCPToolWrapper) |
 | **定时任务** | CronCreate/Delete/List | 同 |
 | **任务管理** | TaskCreate/Update/Get/List/Output/Stop | 同 |
@@ -562,7 +561,7 @@ Claude Code 的并发/串行分区：
 | **学习队列** | 无 | 自动捕获未知概念 → 标记已学 → 同步飞书 |
 | **部署工具** | 无 | DeployCheck/List/Plan/Run/Rollback |
 | **前端架构** | Ink (TUI) | Zustand ×10 + REST/WS 分离 |
-| **测试** | Jest | pytest + pytest-asyncio, 122 tests |
+| **测试** | Jest | pytest + pytest-asyncio, 135 tests |
 
 ---
 
@@ -579,15 +578,15 @@ MAI-agent/
 │   ├── server.py             # FastAPI + WebSocket (27 REST 端点 + 1 WS)
 │   ├── session.py            # 会话持久化
 │   ├── core/
-│   │   ├── engine.py         # AgentEngine (377 lines)
-│   │   ├── loop.py           # agent_loop (556 lines)
+│   │   ├── engine.py         # AgentEngine
+│   │   ├── loop.py           # agent_loop
 │   │   └── models.py         # 数据模型
 │   ├── tools/                # 49 个工具 (24 files, ~3,000 lines)
 │   │   ├── base.py           # Tool 抽象基类
 │   │   ├── registry.py       # 工具注册表
 │   │   └── orchestration.py  # 并发/串行编排
 │   ├── hooks/                # PreToolUse 门控系统
-│   ├── brains/               # 四脑协调器
+│   ├── brains/               # 四脑子 Agent 定义
 │   ├── knowledge/            # 知识引擎 + 学习队列
 │   ├── services/             # 记忆、飞书、MCP 客户端
 │   ├── llm/                  # LLM 客户端
@@ -616,7 +615,7 @@ MAI-agent/
 │   │       ├── lib/           # 工具库 (4 files)
 │   │       └── types/         # TypeScript 类型 (9 files)
 │   └── assets/               # 图标、字体等静态资源
-├── tests/                    # 测试 (122 tests, 10 files)
+├── tests/                    # 测试 (135 tests)
 ├── pyproject.toml
 └── README.md
 ```
@@ -625,7 +624,7 @@ MAI-agent/
 
 ```bash
 # 终端 1: 启动后端
-python -m mai_agent.cli serve --port 8765
+python -m mai_agent.cli --serve --port 8765
 
 # 终端 2: 启动前端
 cd desktop && npm run dev
@@ -646,7 +645,7 @@ cd desktop && npm run package
 ### 运行测试
 
 ```bash
-pytest tests/ -v          # 122 tests
+pytest tests/ -v          # 135 tests
 pytest tests/ --cov        # 覆盖率 (需 pytest-cov)
 pytest tests/ -k "memory"  # 按名称过滤
 ```

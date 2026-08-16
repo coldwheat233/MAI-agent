@@ -18,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mai_agent.core.loop import agent_loop, AgentLoopConfig, StepProgress, StepProgress
+from mai_agent.core.loop import agent_loop, AgentLoopConfig, StepProgress
 from mai_agent.llm.client import LLMClient
 from mai_agent.core.models import Message, PermissionMode, UserMessage, AssistantMessage
 from mai_agent.tools.base import RunContext
@@ -98,7 +98,6 @@ class AgentEngine:
         # Session stats
         self._start_time = 0.0
         self._tools_called: list[str] = []  # tool names per call
-        self._files_touched: set[str] = set()
 
         # Structured logger (JSON-lines, async writer)
         self._slog = None
@@ -108,7 +107,7 @@ class AgentEngine:
     def _init_session_state(self) -> dict[str, Any]:
         """初始化会话级共享状态（含沙箱策略、项目根）。"""
         state: dict[str, Any] = {"project_root": self.config.cwd}
-        # 沙箱策略
+        # 沙箱策略 —— 存入 session_state，供 Bash / Write / Edit 按 engine 上下文读取
         sandbox_mode = getattr(self.config, "sandbox_mode", "off")
         if sandbox_mode and sandbox_mode != "off":
             from mai_agent.sandbox.policy import default_policy, strict_policy
@@ -119,14 +118,6 @@ class AgentEngine:
             else:
                 policy = default_policy(writable_paths=paths)
             state["sandbox"] = policy
-
-            # 同步沙箱策略到 hook 层（供 Write/Edit 工具使用）
-            from mai_agent.hooks.builtins import set_sandbox_hook_state
-            set_sandbox_hook_state(policy, self.config.cwd)
-        else:
-            # 清除 hook 层沙箱状态
-            from mai_agent.hooks.builtins import set_sandbox_hook_state
-            set_sandbox_hook_state(None, self.config.cwd)
         return state
 
     def start(self) -> None:
@@ -144,7 +135,6 @@ class AgentEngine:
         self._turn_count = 0
         self._start_time = time.monotonic()
         self._tools_called = []
-        self._files_touched = set()
 
         # Start structured logger
         from mai_agent.services.structured_logger import get_logger
@@ -318,13 +308,13 @@ class AgentEngine:
             logger.warning("记忆提取失败: %s", exc)
 
     async def _detect_concepts(self, text: str) -> None:
-        """后台检测用户输入中的技术概念，中/高复杂度自动入学习队列。"""
+        """后台知识引擎：LLM 抽概念 → BM25/向量+LLM 边界检测 → 入学习队列 + 写知识库。"""
         try:
-            from mai_agent.knowledge.vector_store import KnowledgeStore
+            from mai_agent.knowledge.vector_store import get_store
             from mai_agent.knowledge.concept_detector import ConceptDetector
             from mai_agent.knowledge.learning_queue import list_items, add_item
 
-            store = KnowledgeStore(knowledge_dir=self.config.cwd + "/.mai/knowledge")
+            store = get_store(self.config.cwd + "/.mai/chroma")
             detector = ConceptDetector(
                 knowledge_store=store,
                 api_key=self.config.llm_api_key,
@@ -332,28 +322,39 @@ class AgentEngine:
                 model=self.config.llm_model,
             )
             extracted = await detector.extract(text)
+            # 边界检测：查知识库（BM25 + 可选向量）+ LLM 判定 known/unknown
+            extracted = await detector.check_boundary(extracted)
 
-            # 已有概念去重（不区分大小写）
             try:
                 existing = {i["concept"].lower() for i in list_items(self.config.cwd)}
             except Exception:
                 existing = set()
 
             for c in extracted:
-                if c.complexity in ("medium", "high"):
+                if c.action == "ignore":
+                    continue  # 已知概念，跳过
+                # 未知概念 → 写知识库（供后续边界检测去重）
+                try:
+                    await store.add(
+                        c.term,
+                        f"{c.term}: {c.context}",
+                        {"complexity": c.complexity},
+                    )
+                except Exception:
+                    pass
+                # 中/高复杂度 → 入学习队列
+                if c.complexity in ("medium", "high") and c.term.lower() not in existing:
                     logger.info("检测到概念: %s (复杂度: %s)", c.term, c.complexity)
-                    if c.term.lower() not in existing:
-                        try:
-                            add_item(
-                                concept=c.term,
-                                context=c.context,
-                                priority=c.complexity,
-                                base_dir=self.config.cwd,
-                            )
-                            logger.info("已加入学习队列: %s", c.term)
-                            existing.add(c.term.lower())
-                        except Exception:
-                            pass
+                    try:
+                        add_item(
+                            concept=c.term,
+                            context=c.context,
+                            priority=c.complexity,
+                            base_dir=self.config.cwd,
+                        )
+                        existing.add(c.term.lower())
+                    except Exception:
+                        pass
         except Exception as exc:
             logger.debug("概念检测失败: %s", exc)
 
@@ -367,6 +368,8 @@ class AgentEngine:
             await stop_all_mcp()
         except Exception:
             pass
+        # 关闭 LLM 底层连接池
+        await self._llm.aclose()
         if self._slog:
             self._slog.log("session_end", {"turns": self._turn_count, "tools_total": len(self._tools_called)})
             await self._slog.stop()
@@ -455,12 +458,3 @@ class AgentEngine:
             "messages": len(self._messages),
             "bg_tasks_pending": self.pending_tasks,
         }
-
-
-def _estimate_tokens(messages: list[Message]) -> int:
-    """简单 token 估算：每 4 字符 ≈ 1 token。"""
-    total = 0
-    for m in messages:
-        if m.content:
-            total += len(m.content) // 4
-    return total

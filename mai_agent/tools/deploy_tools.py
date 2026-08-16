@@ -83,7 +83,7 @@ class DeployPlanTool(Tool):
     name = "DeployPlan"
     description = "Generate a step-by-step deployment plan. Analyzes the project and creates a checklist."
     input_schema = DeployPlanInput
-    is_concurrency_safe = True
+    is_concurrency_safe = False  # 会写 .mai/deploys/{id}.json
 
     async def call(self, input: DeployPlanInput, context: RunContext) -> str:
         if input.steps:
@@ -136,7 +136,7 @@ class DeployCheckTool(Tool):
     name = "DeployCheck"
     description = "Run pre-deployment checks: tests pass? working tree clean?"
     input_schema = DeployCheckInput
-    is_concurrency_safe = True
+    is_concurrency_safe = False  # 会回写 deploy 记录的 checks 字段
 
     async def call(self, input: DeployCheckInput, context: RunContext) -> str:
         deploy = _load_deploy(context.cwd, input.deploy_id)
@@ -232,6 +232,16 @@ class DeployRunTool(Tool):
 
         # 执行
         cmd = step["name"]
+        # 沙箱审查（与 Bash 一致，避免 DeployRun 绕过沙箱执行任意命令）
+        policy = context.session_state.get("sandbox")
+        if policy is not None and getattr(policy, "active", False):
+            from mai_agent.sandbox.policy import SandboxDecision
+            decision, violations = policy.validate(cmd, context.cwd)
+            if decision == SandboxDecision.DENY:
+                step["status"] = "failed"
+                step["output"] = f"沙箱拦截: {violations}"
+                _save_deploy(context.cwd, deploy)
+                return f"[ERROR] DeployRun 步骤被沙箱拦截: {cmd}"
         out, err, code = await _sh(cmd, context.cwd, timeout=120)
 
         step["status"] = "completed" if code == 0 else "failed"
@@ -290,9 +300,10 @@ class DeployRollbackTool(Tool):
         step["rolled_back_at"] = datetime.now(timezone.utc).isoformat()
         _save_deploy(context.cwd, deploy)
 
-        return (f"DeployRollback #{input.deploy_id} Step {idx+1}/{len(steps)} [ROLLED BACK]\n"
+        return (f"DeployRollback #{input.deploy_id} Step {idx+1}/{len(steps)} [已标记回滚]\n"
                 f"  command: {step['name']}\n"
-                f"  The step has been marked as rolled back. Manual reversal may be needed.")
+                f"  说明：部署步骤是任意 shell 命令，无法自动逆向。此操作仅记录 rolled_back 标记，"
+                f"请手动执行该步骤的反向操作。")
 
 
 registry.register(DeployRollbackTool())

@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import type { SessionInfo } from '@/types'
 import { api } from '@/lib/api'
+import { SERVER_URL } from '@/lib/constants'
 
 interface SessionState {
   sessions: SessionInfo[]
@@ -40,7 +41,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     for (const ws of workspaces) {
       try {
         // Switch to workspace to fetch its sessions
-        const res = await fetch(`http://localhost:8765/api/sessions?workspace=${encodeURIComponent(ws)}`)
+        const res = await fetch(`${SERVER_URL}/api/sessions?workspace=${encodeURIComponent(ws)}`)
         if (res.ok) {
           result[ws] = await res.json()
         }
@@ -64,7 +65,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   deleteSession: async (id) => {
     try {
-      const res = await fetch(`http://localhost:8765/api/sessions/${id}`, { method: 'DELETE' })
+      const res = await fetch(`${SERVER_URL}/api/sessions/${id}`, { method: 'DELETE' })
       if (res.ok) {
         // Remove from local state
         set((s) => ({

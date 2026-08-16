@@ -138,49 +138,31 @@ async def test_bash_tool_passes_without_sandbox(temp_dir):
 
 
 @pytest.mark.asyncio
-async def test_write_sandbox_hook_denies_outside_path(temp_dir):
-    """Write tool is denied by sandbox hook when writing outside writable paths."""
+async def test_write_sandbox_denies_outside_path(temp_dir):
+    """Write tool 在沙箱激活时拒绝写入允许路径之外（按 engine 的 session_state）。"""
+    from pathlib import Path
     from mai_agent.tools.file_write import FileWriteTool
     from mai_agent.tools.base import RunContext
     from mai_agent.sandbox.policy import default_policy
-    from mai_agent.hooks.builtins import set_sandbox_hook_state
 
-    # Activate sandbox for this session
     policy = default_policy(writable_paths=[temp_dir])
-    set_sandbox_hook_state(policy, temp_dir)
-
-    try:
-        # Write hook checks via can_use_tool
-        from mai_agent.hooks.gate import can_use_tool
-        result = await can_use_tool(
-            tool_name="Write",
-            tool_input={"file_path": "/etc/secret.txt", "content": "evil"},
-            permission_mode="auto",
-        )
-        # auto mode normally allows all, but sandbox hook should deny
-        assert not result.allow, f"Expected deny, got allow. Reason: {result.reason}"
-        assert "沙箱" in result.reason
-    finally:
-        # Clean up — reset to off
-        set_sandbox_hook_state(None, temp_dir)
+    ctx = RunContext(cwd=temp_dir, session_state={"sandbox": policy})
+    outside = str(Path(temp_dir).parent / "mai_sandbox_outside.txt")
+    result = await FileWriteTool().execute({"file_path": outside, "content": "evil"}, ctx)
+    assert result.is_error
+    assert "沙箱" in result.content
 
 
 @pytest.mark.asyncio
-async def test_write_sandbox_hook_allows_inside_path(temp_dir):
-    """Write tool is allowed by sandbox hook when inside writable paths."""
-    from mai_agent.hooks.builtins import set_sandbox_hook_state
+async def test_write_sandbox_allows_inside_path(temp_dir):
+    """Write tool 在沙箱激活时允许写入允许路径内（按 engine 的 session_state）。"""
+    from pathlib import Path
+    from mai_agent.tools.file_write import FileWriteTool
+    from mai_agent.tools.base import RunContext
     from mai_agent.sandbox.policy import default_policy
-    from mai_agent.hooks.gate import can_use_tool
 
     policy = default_policy(writable_paths=[temp_dir])
-    set_sandbox_hook_state(policy, temp_dir)
-
-    try:
-        result = await can_use_tool(
-            tool_name="Write",
-            tool_input={"file_path": f"{temp_dir}/output.txt", "content": "safe"},
-            permission_mode="auto",
-        )
-        assert result.allow, f"Expected allow. Reason: {result.reason}"
-    finally:
-        set_sandbox_hook_state(None, temp_dir)
+    ctx = RunContext(cwd=temp_dir, session_state={"sandbox": policy})
+    inside = str(Path(temp_dir) / "output.txt")
+    result = await FileWriteTool().execute({"file_path": inside, "content": "safe"}, ctx)
+    assert not result.is_error
