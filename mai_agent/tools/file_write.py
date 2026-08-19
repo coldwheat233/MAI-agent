@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 
@@ -33,6 +34,11 @@ class FileWriteTool(Tool):
     description = "写入文件（创建或覆写）。会自动创建父目录。"
     input_schema = FileWriteInput
     is_concurrency_safe = False
+
+    def write_targets(self, args: dict[str, Any]) -> list[str]:
+        """声明写目标：file_path。多个 Write/Edit 写不同文件可并发。"""
+        fp = args.get("file_path") if isinstance(args, dict) else getattr(args, "file_path", "")
+        return [str(fp)] if fp else []
 
     async def call(self, input: FileWriteInput, context: RunContext) -> str:
         path = resolve_path(input.file_path, context.cwd)
