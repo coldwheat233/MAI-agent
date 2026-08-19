@@ -32,6 +32,7 @@ export default function App() {
   const fetchTools = useToolStore((s) => s.fetchTools)
   const fetchGitStatus = useGitStore((s) => s.fetchGitStatus)
   const fetchFeishuStatus = useSettingsStore((s) => s.fetchFeishuStatus)
+  const fetchProviders = useSettingsStore((s) => s.fetchProviders)
   const permission = useSettingsStore((s) => s.permission)
   const closePanel = useUIStore((s) => s.closePanel)
   const openSettings = useUIStore((s) => s.openSettings)
@@ -45,6 +46,7 @@ export default function App() {
     fetchTools()
     fetchGitStatus()
     fetchFeishuStatus()
+    fetchProviders()
   }, [])
 
   // Connect WebSocket on mount

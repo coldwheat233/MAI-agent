@@ -13,3 +13,6 @@ desktop/out/
 desktop/.vite/
 *.spec
 !backend.spec
+
+# 个人文档（不提交）
+/面试讲稿.md

@@ -7227,6 +7227,12 @@ const api = {
   fetchWorkspace: () => get("/api/workspace"),
   fetchWorkspaces: () => get("/api/workspaces"),
   switchWorkspace: (cwd) => post("/api/workspace", { cwd }),
+  registerWorkspace: (cwd) => post("/api/workspaces/register", { cwd }),
+  unregisterWorkspace: (cwd) => fetch(`${SERVER_URL}/api/workspaces`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cwd })
+  }).then((r2) => r2.json()),
   // Browse directory
   browseDirectory: (path) => get(`/api/browse?path=${encodeURIComponent(path)}`),
   // Settings
@@ -7243,20 +7249,24 @@ const api = {
 };
 const useSessionStore = create((set, get2) => ({
   sessions: [],
+  loadingSessions: false,
   workspaceSessions: {},
   currentSessionId: "default",
   fetchSessions: async () => {
+    set({ loadingSessions: true });
     try {
       const sessions = await api.fetchSessions();
       set({ sessions: Array.isArray(sessions) ? sessions : [] });
     } catch {
+    } finally {
+      set({ loadingSessions: false });
     }
   },
   fetchAllWorkspaceSessions: async (workspaces) => {
     const result = {};
     for (const ws of workspaces) {
       try {
-        const res = await fetch(`http://localhost:8765/api/sessions?workspace=${encodeURIComponent(ws)}`);
+        const res = await fetch(`${SERVER_URL}/api/sessions?workspace=${encodeURIComponent(ws)}`);
         if (res.ok) {
           result[ws] = await res.json();
         }
@@ -7276,7 +7286,7 @@ const useSessionStore = create((set, get2) => ({
   setCurrentSessionId: (id2) => set({ currentSessionId: id2 }),
   deleteSession: async (id2) => {
     try {
-      const res = await fetch(`http://localhost:8765/api/sessions/${id2}`, { method: "DELETE" });
+      const res = await fetch(`${SERVER_URL}/api/sessions/${id2}`, { method: "DELETE" });
       if (res.ok) {
         set((s2) => ({
           sessions: s2.sessions.filter((x2) => x2.session_id !== id2)
@@ -7304,18 +7314,22 @@ const useChatStore = create((set, get2) => ({
   contextTokens: 0,
   turnCount: 0,
   toolCallCount: 0,
-  addUserMessage: (text) => {
+  addUserMessage: (text, opts) => {
     const id2 = genId();
     const msg = {
       id: id2,
       role: "user",
       content: text,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      ...opts?.rerunOf ? { rerunOf: opts.rerunOf } : {}
     };
     set((s2) => ({
-      messages: [...s2.messages.map(
-        (m2) => m2.role === "assistant" ? { ...m2, isStreaming: false, isThinking: false } : m2
-      ), msg],
+      messages: [
+        ...s2.messages.map(
+          (m2) => m2.role === "assistant" ? { ...m2, isStreaming: false, isThinking: false } : m2
+        ),
+        msg
+      ],
       isStreaming: false,
       streamingMsgId: null
     }));
@@ -7329,6 +7343,15 @@ const useChatStore = create((set, get2) => ({
     }));
   },
   startThinking: () => {
+    const { streamingMsgId } = get2();
+    if (streamingMsgId) {
+      set((s2) => ({
+        messages: s2.messages.map(
+          (m2) => m2.id === streamingMsgId ? { ...m2, isThinking: true } : m2
+        )
+      }));
+      return;
+    }
     const id2 = genId();
     const msg = {
       id: id2,
@@ -7370,13 +7393,15 @@ const useChatStore = create((set, get2) => ({
   },
   finishTool: (name, result, isError) => {
     const { streamingMsgId } = get2();
+    let matched = false;
     set((s2) => ({
       messages: s2.messages.map((m2) => {
         if (m2.id !== streamingMsgId || !m2.toolCalls) return m2;
         return {
           ...m2,
           toolCalls: m2.toolCalls.map((tc2) => {
-            if (tc2.name === name && tc2.status === "running") {
+            if (!matched && tc2.name === name && tc2.status === "running") {
+              matched = true;
               return { ...tc2, result, isError, status: isError ? "error" : "ok" };
             }
             return tc2;
@@ -7414,28 +7439,29 @@ const useChatStore = create((set, get2) => ({
     }
   },
   clearMessages: () => set({ messages: [], isStreaming: false, streamingMsgId: null }),
-  setMessages: (msgs) => set({ messages: msgs })
-}));
-const STORAGE_KEY = "mai-workspaces";
-function loadSavedWorkspaces() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
+  setMessages: (msgs) => set({ messages: msgs }),
+  trimToLastUserMessage: () => {
+    set((s2) => {
+      let lastUser = -1;
+      for (let i2 = s2.messages.length - 1; i2 >= 0; i2--) {
+        if (s2.messages[i2].role === "user") {
+          lastUser = i2;
+          break;
+        }
+      }
+      if (lastUser < 0) return s2;
+      return {
+        messages: s2.messages.slice(0, lastUser),
+        isStreaming: false,
+        streamingMsgId: null
+      };
+    });
   }
-}
-function saveWorkspaces(paths) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
-}
-function normalize(p2) {
-  return p2.replace(/\\/g, "/");
-}
+}));
 const useWorkspaceStore = create((set, get2) => ({
   cwd: "",
   name: "Loading...",
   workspaces: [],
-  savedPaths: loadSavedWorkspaces(),
   browsePath: "",
   browseEntries: [],
   fetchWorkspace: async () => {
@@ -7443,13 +7469,6 @@ const useWorkspaceStore = create((set, get2) => ({
       const info = await api.fetchWorkspace();
       const name = info.name || info.cwd.split(/[\\/]/).pop() || "...";
       set({ cwd: info.cwd, name });
-      const paths = loadSavedWorkspaces();
-      const norm = normalize(info.cwd);
-      if (!paths.map(normalize).includes(norm)) {
-        paths.push(info.cwd);
-        saveWorkspaces(paths);
-        set({ savedPaths: paths });
-      }
     } catch {
       set({ name: "Unknown" });
     }
@@ -7464,40 +7483,16 @@ const useWorkspaceStore = create((set, get2) => ({
   switchWorkspace: async (cwd) => {
     const result = await api.switchWorkspace(cwd);
     const name = result.cwd.split(/[\\/]/).pop() || cwd;
-    const paths = loadSavedWorkspaces();
-    const norm = normalize(cwd);
-    if (!paths.map(normalize).includes(norm)) {
-      paths.push(cwd);
-      saveWorkspaces(paths);
-    }
-    set({ cwd: result.cwd, name, savedPaths: paths });
-  },
-  addWorkspace: async (cwd) => {
-    const prevCwd = get2().cwd;
-    try {
-      await api.switchWorkspace(cwd);
-    } catch {
-    }
-    const paths = loadSavedWorkspaces();
-    const norm = normalize(cwd);
-    if (!paths.map(normalize).includes(norm)) {
-      paths.push(cwd);
-      saveWorkspaces(paths);
-    }
-    set({ savedPaths: paths });
-    if (prevCwd && normalize(prevCwd) !== normalize(cwd)) {
-      try {
-        await api.switchWorkspace(prevCwd);
-      } catch {
-      }
-    }
+    set({ cwd: result.cwd, name });
     get2().fetchWorkspaces();
   },
-  removeWorkspace: (cwd) => {
-    const paths = loadSavedWorkspaces();
-    const filtered = paths.filter((p2) => normalize(p2) !== normalize(cwd));
-    saveWorkspaces(filtered);
-    set({ savedPaths: filtered });
+  addWorkspace: async (cwd) => {
+    await api.registerWorkspace(cwd);
+    get2().fetchWorkspaces();
+  },
+  removeWorkspace: async (cwd) => {
+    await api.unregisterWorkspace(cwd);
+    get2().fetchWorkspaces();
   },
   browseDirectory: async (path) => {
     try {
@@ -7505,7 +7500,8 @@ const useWorkspaceStore = create((set, get2) => ({
       set({ browsePath: result.path, browseEntries: result.entries });
     } catch {
     }
-  }
+  },
+  setCwd: (cwd) => set({ cwd, name: cwd.split(/[\\/]/).pop() || cwd })
 }));
 function ContextMenu({ x: x2, y: y2, items, onClose }) {
   const ref = reactExports.useRef(null);
@@ -7994,6 +7990,18 @@ const RefreshCw = createLucideIcon("RefreshCw", [
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
+const Repeat = createLucideIcon("Repeat", [
+  ["path", { d: "m17 2 4 4-4 4", key: "nntrym" }],
+  ["path", { d: "M3 11v-1a4 4 0 0 1 4-4h14", key: "84bu3i" }],
+  ["path", { d: "m7 22-4-4 4-4", key: "1wqhfi" }],
+  ["path", { d: "M21 13v1a4 4 0 0 1-4 4H3", key: "1rx37r" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
 const RotateCcw = createLucideIcon("RotateCcw", [
   ["path", { d: "M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", key: "1357e3" }],
   ["path", { d: "M3 3v5h5", key: "1xhq8a" }]
@@ -8265,6 +8273,7 @@ function Sidebar() {
   const activePanel = useUIStore((s2) => s2.activePanel);
   const openSettings = useUIStore((s2) => s2.openSettings);
   const sessions = useSessionStore((s2) => s2.sessions);
+  const loadingSessions = useSessionStore((s2) => s2.loadingSessions);
   const currentId = useSessionStore((s2) => s2.currentSessionId);
   const setCurrentSessionId = useSessionStore((s2) => s2.setCurrentSessionId);
   const setMessages = useChatStore((s2) => s2.setMessages);
@@ -8273,10 +8282,10 @@ function Sidebar() {
   const deleteSession = useSessionStore((s2) => s2.deleteSession);
   const clearMessages = useChatStore((s2) => s2.clearMessages);
   const cwd = useWorkspaceStore((s2) => s2.cwd);
-  const savedPaths = useWorkspaceStore((s2) => s2.savedPaths);
+  const workspaces = useWorkspaceStore((s2) => s2.workspaces);
   const switchWorkspace = useWorkspaceStore((s2) => s2.switchWorkspace);
   const addWorkspace = useWorkspaceStore((s2) => s2.addWorkspace);
-  const [expanded, setExpanded] = reactExports.useState({});
+  const [sessionsExpanded, setSessionsExpanded] = reactExports.useState(true);
   const [ctxMenu, setCtxMenu] = reactExports.useState(null);
   const [deleteTarget, setDeleteTarget] = reactExports.useState(null);
   const [dragOver, setDragOver] = reactExports.useState(false);
@@ -8297,7 +8306,7 @@ function Sidebar() {
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`http://localhost:8765/api/sessions/search?q=${encodeURIComponent(q2)}`);
+        const res = await fetch(`${SERVER_URL}/api/sessions/search?q=${encodeURIComponent(q2)}`);
         if (res.ok) setSearchResults(await res.json());
       } catch {
         setSearchResults([]);
@@ -8312,7 +8321,9 @@ function Sidebar() {
   const wsList = reactExports.useMemo(() => {
     const seen = /* @__PURE__ */ new Set();
     const list = [];
-    for (const p2 of savedPaths) {
+    for (const w2 of workspaces) {
+      const p2 = w2.path;
+      if (!p2) continue;
       const n2 = norm(p2);
       if (seen.has(n2)) continue;
       seen.add(n2);
@@ -8323,7 +8334,7 @@ function Sidebar() {
       if (!seen.has(n2)) list.push({ path: cwd, name: cwd.split(/[\\/]/).pop() || cwd, isCurrent: true });
     }
     return list;
-  }, [savedPaths, cwd]);
+  }, [workspaces, cwd]);
   const filteredWsList = q2 ? wsList.filter((ws) => {
     if (ws.name.toLowerCase().includes(q2)) return true;
     if (ws.path.toLowerCase().includes(q2)) return true;
@@ -8333,8 +8344,17 @@ function Sidebar() {
   const filteredSessions = q2 ? sessions.filter((s2) => s2.session_id.toLowerCase().includes(q2)) : sessions;
   const handleLoadSession = async (sessionId) => {
     setCurrentSessionId(sessionId);
-    api.loadSession(sessionId).catch(() => {
-    });
+    setSessionsExpanded(true);
+    let loadedCwd;
+    try {
+      const res = await api.loadSession(sessionId);
+      loadedCwd = res.cwd;
+    } catch {
+    }
+    if (loadedCwd && norm(loadedCwd) !== norm(useWorkspaceStore.getState().cwd)) {
+      await useWorkspaceStore.getState().fetchWorkspace();
+      fetchSessions();
+    }
     try {
       const detail = await api.fetchSession(sessionId);
       if (detail.messages) {
@@ -8358,6 +8378,7 @@ function Sidebar() {
   const handleNewSession = async (wsPath) => {
     if (wsPath !== cwd) await switchWorkspace(wsPath);
     clearMessages();
+    setSessionsExpanded(true);
     await newSession();
     fetchSessions();
   };
@@ -8373,20 +8394,39 @@ function Sidebar() {
     const folder = await window.electronAPI.selectFolder();
     if (folder) {
       await addWorkspace(folder);
-      setExpanded((e) => ({ ...e, [folder]: true }));
+      await switchWorkspace(folder);
+      setSessionsExpanded(true);
     }
   };
   const handleSwitchWorkspace = async (wsPath) => {
     if (norm(wsPath) === norm(cwd)) return;
     clearMessages();
     setSwitching(true);
-    setExpanded((e) => ({ ...e, [wsPath]: true }));
-    await switchWorkspace(wsPath);
-    setSwitching(false);
+    setSessionsExpanded(true);
+    try {
+      await switchWorkspace(wsPath);
+    } catch {
+    } finally {
+      setSwitching(false);
+    }
     fetchSessions();
   };
-  const toggleExpand = (wsPath) => {
-    setExpanded((e) => ({ ...e, [wsPath]: e[wsPath] === false ? true : false }));
+  const removeWorkspace = useWorkspaceStore((s2) => s2.removeWorkspace);
+  const handleRemoveWorkspace = (wsPath) => {
+    const normed = norm(wsPath);
+    removeWorkspace(wsPath);
+    if (normed === norm(cwd)) {
+      const remaining = useWorkspaceStore.getState().workspaces.filter((w2) => norm(w2.path) !== normed);
+      if (remaining.length > 0) {
+        handleSwitchWorkspace(remaining[0].path);
+      } else {
+        clearMessages();
+        fetchSessions();
+      }
+    }
+  };
+  const toggleExpand = (_wsPath) => {
+    setSessionsExpanded((v2) => !v2);
   };
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -8398,7 +8438,7 @@ function Sidebar() {
     setDragOver(false);
     const file = e.dataTransfer.items[0]?.getAsFile();
     if (file) {
-      const path = file.path;
+      const path = window.electronAPI.getPathForFile(file);
       if (path) {
         try {
           await api.browseDirectory(path);
@@ -8406,15 +8446,18 @@ function Sidebar() {
           return;
         }
         await addWorkspace(path);
-        setExpanded((e2) => ({ ...e2, [path]: true }));
+        await switchWorkspace(path);
+        setSessionsExpanded(true);
       }
     }
   };
   const handleWsContextMenu = (e, wsPath) => {
     e.preventDefault();
+    const isCurrent = norm(wsPath) === norm(cwd);
     setCtxMenu({ x: e.clientX, y: e.clientY, items: [
       { label: "New Session", onClick: () => handleNewSession(wsPath) },
-      { label: "Switch to Project", onClick: () => handleSwitchWorkspace(wsPath) }
+      ...!isCurrent ? [{ label: "Switch to Project", onClick: () => handleSwitchWorkspace(wsPath) }] : [],
+      { label: "Remove from list", onClick: () => handleRemoveWorkspace(wsPath), danger: true }
     ] });
   };
   const handleSessionContextMenu = (e, s2) => {
@@ -8481,24 +8524,12 @@ function Sidebar() {
                 {
                   className: "px-3 py-2 hover:bg-[var(--surface2)] cursor-pointer border-b border-[var(--border)] last:border-b-0",
                   onClick: () => {
-                    if (r2.workspace && r2.workspace !== "(legacy)") {
-                      let slug = r2.workspace;
-                      let wsPath;
-                      if (slug.includes("__")) {
-                        const parts = slug.split("__");
-                        wsPath = parts[0] + ":/" + parts.slice(1).join("__").replace(/_/g, "/");
-                      } else {
-                        wsPath = slug.replace(/_/g, "/");
-                      }
-                      handleSwitchWorkspace(wsPath).then(() => handleLoadSession(r2.session_id));
-                    } else {
-                      handleLoadSession(r2.session_id);
-                    }
+                    handleLoadSession(r2.session_id);
                   },
                   children: [
                     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 mb-1", children: [
                       /* @__PURE__ */ jsxRuntimeExports.jsx(MessageSquare, { size: 11, className: "text-[var(--accent)] shrink-0" }),
-                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[11px] font-medium text-[var(--text)] truncate", children: r2.session_id })
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[11px] font-medium text-[var(--text)] truncate", children: r2.title || r2.session_id })
                     ] }),
                     r2.matches?.slice(0, 2).map((m2, i2) => /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-[10px] text-[var(--text3)] truncate ml-4 leading-relaxed", children: m2 }, i2)),
                     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-[9px] text-[var(--text3)] mt-0.5 ml-4", children: [
@@ -8520,23 +8551,23 @@ function Sidebar() {
             ] }),
             filteredWsList.map((ws) => {
               const isCurrent = ws.isCurrent;
-              const isOpen = expanded[ws.path] !== false;
+              const showSessions = isCurrent && sessionsExpanded;
               const hasActiveSession = isCurrent && !!currentId && currentId !== "default";
-              const displaySessions = isCurrent ? filteredSessions : [];
               return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "border-b border-[var(--border)] last:border-b-0", children: [
                 /* @__PURE__ */ jsxRuntimeExports.jsxs(
                   "div",
                   {
-                    className: `flex items-center gap-1.5 px-2 py-1.5 hover:bg-[var(--surface2)] cursor-pointer transition-colors group ${hasActiveSession ? "bg-[var(--accent)]/5" : ""} ${switching && isCurrent ? "opacity-50" : ""}`,
+                    className: `relative flex items-center gap-1.5 pl-3 pr-2 py-1.5 cursor-pointer transition-colors group ${hasActiveSession ? "bg-[var(--accent)]/10" : isCurrent ? "bg-[var(--accent)]/5" : "hover:bg-[var(--surface2)]"} ${switching && isCurrent ? "opacity-50" : ""}`,
                     onClick: () => {
                       if (!isCurrent) handleSwitchWorkspace(ws.path);
-                      else toggleExpand(ws.path);
+                      else toggleExpand();
                     },
                     onContextMenu: (e) => handleWsContextMenu(e, ws.path),
                     children: [
-                      /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronRight, { size: 13, className: `text-[var(--text3)] transition-transform shrink-0 ${isOpen ? "rotate-90" : ""}` }),
-                      /* @__PURE__ */ jsxRuntimeExports.jsx(Folder, { size: 13, className: `shrink-0 ${hasActiveSession || isCurrent ? "text-[var(--accent)]" : "text-[var(--text2)]"}` }),
-                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-xs font-medium truncate flex-1 ${hasActiveSession || isCurrent ? "text-[var(--accent)]" : "text-[var(--text)]"}`, children: ws.name }),
+                      isCurrent && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "absolute left-0 top-1 bottom-1 w-[3px] rounded-r bg-[var(--accent)]" }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronRight, { size: 13, className: `text-[var(--text3)] transition-transform shrink-0 ${showSessions ? "rotate-90" : ""}` }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(Folder, { size: 13, className: `shrink-0 ${isCurrent ? "text-[var(--accent)]" : "text-[var(--text2)]"}` }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-xs font-medium truncate flex-1 ${isCurrent ? "text-[var(--accent)]" : "text-[var(--text)]"}`, children: ws.name }),
                       isCurrent && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-1.5 h-1.5 rounded-full bg-[var(--green)] shrink-0", title: "Active workspace" }),
                       !isCurrent && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)]", children: "↗" }),
                       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -8554,7 +8585,7 @@ function Sidebar() {
                     ]
                   }
                 ),
-                isOpen && isCurrent && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pb-1", children: displaySessions.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-8 py-2 text-[10px] text-[var(--text3)]", children: q2 ? "No matching sessions" : "No sessions" }) : displaySessions.map((s2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                showSessions && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pb-1", children: loadingSessions && filteredSessions.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-8 py-2 text-[10px] text-[var(--text3)]", children: "Loading sessions..." }) : filteredSessions.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-8 py-2 text-[10px] text-[var(--text3)]", children: q2 ? "No matching sessions" : "No sessions" }) : filteredSessions.map((s2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
                   "div",
                   {
                     onClick: () => handleLoadSession(s2.session_id),
@@ -8562,7 +8593,7 @@ function Sidebar() {
                     className: `flex items-center gap-1.5 px-2 py-1.5 ml-4 rounded-md cursor-pointer transition-colors group ${s2.session_id === currentId ? "bg-[var(--accent)]/10 text-[var(--accent)]" : "text-[var(--text2)] hover:bg-[var(--surface2)] hover:text-[var(--text)]"}`,
                     children: [
                       /* @__PURE__ */ jsxRuntimeExports.jsx(MessageSquare, { size: 12, className: `shrink-0 ${s2.session_id === currentId ? "text-[var(--accent)]" : "text-[var(--text3)]"}` }),
-                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[11px] truncate flex-1", children: s2.session_id }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[11px] truncate flex-1", children: s2.title || s2.session_id }),
                       /* @__PURE__ */ jsxRuntimeExports.jsx(
                         "button",
                         {
@@ -8577,8 +8608,7 @@ function Sidebar() {
                     ]
                   },
                   s2.session_id
-                )) }),
-                isOpen && !isCurrent && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pb-1", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-8 py-2 text-[10px] text-[var(--text3)]", children: "Click to switch workspace" }) })
+                )) })
               ] }, ws.path);
             }),
             wsList.length === 0 && !q2 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 py-8 text-center text-[11px] text-[var(--text3)]", children: [
@@ -8624,14 +8654,13 @@ function useAutoScroll(dependency) {
 function UserMessage({ message, onResubmit }) {
   const [editing, setEditing] = reactExports.useState(false);
   const [editText, setEditText] = reactExports.useState(message.content);
-  const updateUserMessage = useChatStore((s2) => s2.updateUserMessage);
+  useChatStore((s2) => s2.updateUserMessage);
   const handleRerun = () => {
     onResubmit(message.content, message.id);
   };
   const handleEditResubmit = () => {
     const trimmed = editText.trim();
     if (!trimmed) return;
-    updateUserMessage(message.id, trimmed);
     setEditing(false);
     onResubmit(trimmed, message.id);
   };
@@ -8683,6 +8712,10 @@ function UserMessage({ message, onResubmit }) {
       )
     ] })
   ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    message.rerunOf && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-end gap-1 mb-1 text-[10px] text-[var(--text3)]", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Repeat, { size: 10 }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "重发 · 追加为新的一轮" })
+    ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "bg-[var(--user-bg)] border border-[var(--user-border)] rounded-xl rounded-br-sm px-4 py-2.5 text-sm text-[var(--text)] whitespace-pre-wrap break-words", children: message.content }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex justify-end gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -15930,6 +15963,10 @@ const useSettingsStore = create((set, get2) => ({
     api.setModel(model).catch(() => {
     });
   },
+  setModelFromServer: (model) => {
+    set({ model });
+    localStorage.setItem("mai-model", model);
+  },
   setPermission: (mode) => {
     set({ permission: mode });
     localStorage.setItem("mai-perm", mode);
@@ -16018,7 +16055,7 @@ function EmptyState({ onPromptClick }) {
           onClick: () => handleSessionClick(s2.session_id),
           className: "w-full text-left px-4 py-2.5 rounded-lg hover:bg-[var(--surface2)] text-sm text-[var(--text2)] hover:text-[var(--text)] transition-colors",
           children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-mono text-xs text-[var(--accent)]", children: s2.session_id }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "font-mono text-xs text-[var(--accent)]", children: s2.title || s2.session_id }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-[var(--text3)] ml-3", children: [
               s2.message_count,
               " msgs"
@@ -16939,7 +16976,7 @@ function GitPanel() {
     ] })
   ] });
 }
-const API = "http://localhost:8765/api/learning-queue";
+const API = `${SERVER_URL}/api/learning-queue`;
 const priorityLabel = { high: "高", medium: "中", low: "低" };
 function LearningPanel() {
   const [items, setItems] = reactExports.useState([]);
@@ -17271,7 +17308,7 @@ function FeishuSection() {
     setSaving(true);
     setMsg("");
     try {
-      const res = await fetch("http://localhost:8765/api/feishu/config", {
+      const res = await fetch(`${SERVER_URL}/api/feishu/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ app_id: editAppId.trim(), app_secret: editSecret.trim() })
@@ -17395,8 +17432,9 @@ function createWSHandler(stores) {
     const { chatStore, sessionStore, settingsStore, toolStore } = stores;
     switch (event.type) {
       case "ready": {
-        if (event.model) settingsStore.setModel(event.model);
+        if (event.model) settingsStore.setModelFromServer(event.model);
         if (event.tools) toolStore.setTools(event.tools);
+        if (event.session_id) sessionStore.setCurrentSessionId(event.session_id);
         break;
       }
       case "thinking": {
@@ -17428,6 +17466,19 @@ function createWSHandler(stores) {
         chatStore.handleError(event.message);
         break;
       }
+      case "workspace_switched": {
+        if (event.cwd) {
+          const ws = stores.workspaceStore;
+          ws.setCwd(event.cwd);
+          if (event.session_id) sessionStore.setCurrentSessionId(event.session_id);
+          stores.sessionStore.fetchSessions();
+        }
+        break;
+      }
+      case "undo": {
+        chatStore.trimToLastUserMessage();
+        break;
+      }
       case "status": {
         console.log("[ws:status]", event.message);
         break;
@@ -17442,6 +17493,7 @@ function App() {
   const addUserMessage = useChatStore((s2) => s2.addUserMessage);
   const fetchSessions = useSessionStore((s2) => s2.fetchSessions);
   const fetchWorkspace = useWorkspaceStore((s2) => s2.fetchWorkspace);
+  const fetchWorkspaces = useWorkspaceStore((s2) => s2.fetchWorkspaces);
   const fetchTools = useToolStore((s2) => s2.fetchTools);
   const fetchGitStatus = useGitStore((s2) => s2.fetchGitStatus);
   const fetchFeishuStatus = useSettingsStore((s2) => s2.fetchFeishuStatus);
@@ -17451,6 +17503,7 @@ function App() {
   const newSession = useSessionStore((s2) => s2.newSession);
   const loadInitialData = reactExports.useCallback(async () => {
     fetchWorkspace();
+    fetchWorkspaces();
     fetchSessions();
     fetchTools();
     fetchGitStatus();
@@ -17494,13 +17547,8 @@ function App() {
     send({ type: "submit", text, mode: permission });
   }, [addUserMessage, send, permission]);
   const handleResubmit = reactExports.useCallback((text, afterMsgId) => {
-    const all = useChatStore.getState().messages;
-    const idx = all.findIndex((m2) => m2.id === afterMsgId);
-    if (idx >= 0) {
-      useChatStore.getState().setMessages(all.slice(0, idx + 1));
-    }
-    send({ type: "undo" });
-    addUserMessage(text);
+    if (!text.trim()) return;
+    addUserMessage(text, { rerunOf: afterMsgId });
     send({ type: "submit", text, mode: permission });
   }, [addUserMessage, send, permission]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "h-full flex bg-[var(--bg)] text-[var(--text)]", children: [

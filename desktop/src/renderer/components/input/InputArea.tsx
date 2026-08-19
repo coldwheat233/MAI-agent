@@ -25,15 +25,19 @@ export function InputArea({ onSubmit }: InputAreaProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isStreaming = useChatStore((s) => s.isStreaming)
   const model = useSettingsStore((s) => s.model)
+  const provider = useSettingsStore((s) => s.provider)
+  const providers = useSettingsStore((s) => s.providers)
   const permission = useSettingsStore((s) => s.permission)
   const setModel = useSettingsStore((s) => s.setModel)
   const setPermission = useSettingsStore((s) => s.setPermission)
   const send = useWSStore((s) => s.send)
 
   const cycleModel = () => {
-    const idx = MODELS.indexOf(model)
-    const next = MODELS[(idx + 1) % MODELS.length]
-    setModel(next)
+    // 用当前 provider 的模型列表轮换（回退硬编码 MODELS）
+    const list = providers.find((p) => p.name === provider)?.models || MODELS
+    const idx = list.indexOf(model)
+    const next = list[(idx + 1) % list.length] || MODELS[0]
+    setModel(next, provider)
   }
 
   const cyclePermission = () => {

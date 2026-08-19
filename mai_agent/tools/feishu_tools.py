@@ -190,6 +190,95 @@ class FeishuListTool(Tool):
 registry.register(FeishuListTool())
 
 
+# ── FeishuListSpaces ─────────────────────────────────────
+# 知识库名搜索：列出可访问的知识库空间，可按名称过滤
+
+
+class FeishuListSpacesInput(ToolInput):
+    query: Optional[str] = Field(default=None, description="Optional: filter spaces by name (substring, case-insensitive)")
+
+
+class FeishuListSpacesTool(Tool):
+    name = "FeishuListSpaces"
+    description = ("List your Feishu knowledge base spaces (知识库), optionally filtered by name. "
+                   "Returns space_id + name for each knowledge base — use space_id with FeishuListSpaceDocs.")
+    input_schema = FeishuListSpacesInput
+    is_concurrency_safe = True
+
+    async def call(self, input: FeishuListSpacesInput, context: RunContext) -> str:
+        err = _check_config()
+        if err:
+            return f"[ERROR] {err}"
+
+        try:
+            client = _get_client()
+            spaces = await client.list_spaces()
+            if input.query:
+                q = input.query.lower()
+                spaces = [s for s in spaces if q in s.get("name", "").lower()]
+            if not spaces:
+                return "No knowledge base spaces found."
+            lines = [f"Knowledge base spaces ({len(spaces)}):"]
+            for i, s in enumerate(spaces, 1):
+                name = s.get("name", "untitled")
+                desc = s.get("description", "")
+                sid = s.get("space_id", "")
+                lines.append(f"  {i}. {name}")
+                if desc:
+                    lines.append(f"     description: {desc}")
+                lines.append(f"     space_id: {sid}")
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"[ERROR] FeishuListSpaces failed: {exc}"
+
+
+registry.register(FeishuListSpacesTool())
+
+
+# ── FeishuListSpaceDocs ──────────────────────────────────
+# 读取知识库内列表：列出某个知识库空间下的全部文档
+
+
+class FeishuListSpaceDocsInput(ToolInput):
+    space_id: str = Field(description="Knowledge base space id (from FeishuListSpaces)")
+    page_size: int = Field(default=100, description="Max number of documents to list")
+
+
+class FeishuListSpaceDocsTool(Tool):
+    name = "FeishuListSpaceDocs"
+    description = ("List all documents inside a Feishu knowledge base space (知识库内文档列表). "
+                   "Returns titles + doc tokens — use doc token with FeishuRead to read content.")
+    input_schema = FeishuListSpaceDocsInput
+    is_concurrency_safe = True
+
+    async def call(self, input: FeishuListSpaceDocsInput, context: RunContext) -> str:
+        err = _check_config()
+        if err:
+            return f"[ERROR] {err}"
+
+        try:
+            client = _get_client()
+            docs = await client.list_space_docs(input.space_id, page_size=input.page_size)
+            if not docs:
+                return "No documents in this knowledge base space."
+            lines = [f"Documents in space {input.space_id} ({len(docs)}):"]
+            for i, d in enumerate(docs, 1):
+                title = d.get("title", "untitled")
+                obj_type = d.get("obj_type", "")
+                token = d.get("obj_token", "")
+                depth = d.get("depth", 0)
+                indent = "  " * depth
+                lines.append(f"  {indent}{i}. [{obj_type}] {title}")
+                if token:
+                    lines.append(f"     {indent}doc_token: {token}")
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"[ERROR] FeishuListSpaceDocs failed: {exc}"
+
+
+registry.register(FeishuListSpaceDocsTool())
+
+
 # ── Helpers ──────────────────────────────────────────────
 
 

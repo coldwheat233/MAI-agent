@@ -122,13 +122,44 @@ class LLMClient:
     ):
         # max_retries=0：禁用 SDK 内置重试，避免与 _retry_loop 的指数退避叠加成倍请求。
         # timeout：显式超时，否则 SDK 默认 600s，单次挂起请求会阻塞近 10 分钟。
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+        self.timeout = timeout
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=base_url,
             timeout=timeout,
             max_retries=0,
         )
-        self.model = model
+
+    def reconfigure(self, api_key: str = "", base_url: str = "", model: str = "") -> None:
+        """热切换 provider/model——重建底层 client，保留对象身份与重试逻辑。
+
+        对齐 DSH 的 adapter replace()：切换是无间隙的（调用方持有的引用不变），
+        engine 无需重建，session/messages 全部保留。
+        """
+        new_key = api_key or self.api_key
+        new_url = base_url or self.base_url
+        new_model = model or self.model
+        if new_url == self.base_url and new_key == self.api_key and new_model == self.model:
+            return  # 无变化，跳过
+        old = self.client
+        self.client = AsyncOpenAI(
+            api_key=new_key,
+            base_url=new_url,
+            timeout=self.timeout,
+            max_retries=0,
+        )
+        self.api_key = new_key
+        self.base_url = new_url
+        self.model = new_model
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            loop.create_task(old.close())
+        except Exception:
+            pass
 
     async def aclose(self) -> None:
         """关闭底层 httpx 连接池。长生命周期实例（engine._llm）应在 stop 时调用。"""
