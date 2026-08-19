@@ -1,0 +1,309 @@
+{
+  "generated_at": "2026-08-19 14:50:24",
+  "total_tasks": 16,
+  "passed": 16,
+  "failed": 0,
+  "pass_rate": 100.0,
+  "avg_duration_s": 12.1,
+  "avg_steps": 3.6,
+  "total_llm_calls": 58,
+  "total_tool_calls": 45,
+  "total_tokens": 71877,
+  "total_cost_usd": 1.04,
+  "avg_cost_per_task_usd": 0.065,
+  "tool_failures_top": {
+    "Read": 1
+  },
+  "results": [
+    {
+      "task_id": "mai-001",
+      "instruction": "在当前目录下创建一个名为 hello_eval.txt 的文件，内容为 hello mai agent",
+      "passed": true,
+      "check": "file contains 'hello mai agent'",
+      "duration_s": 5.7,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已创建文件 \u001b[1mhello_eval.txt\u001b[0m，内容为 \u001b[1mhello mai agent\u001b[0m。                          │ ╰───────────────────────────────",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 591,
+        "total_cost": 0.008876,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-002",
+      "instruction": "创建一个 Python 文件 sum.py，实现函数 add(a, b) 返回两数之和，并用 python 运行验证输出",
+      "passed": true,
+      "check": "cmd exit=0 ok",
+      "duration_s": 8.5,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已创建 \u001b[1msum.py\u001b[0m 并成功运行验证。                                               │ │                                        ",
+      "trace": {
+        "spans": 5,
+        "llm_calls": 3,
+        "tool_calls": 2,
+        "total_tokens": 1062,
+        "total_cost": 0.016674,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-003",
+      "instruction": "列出当前目录下所有 .py 文件，并在回答中说明共有多少个",
+      "passed": true,
+      "check": "answer contains 'mai_agent'",
+      "duration_s": 19.8,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 当前目录下共有 \u001b[1m70 个 \u001b[0m\u001b[1m.py\u001b[0m\u001b[1m 文件\u001b[0m，完整列表如下：                                │ │                               ",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 1687,
+        "total_cost": 0.03339,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-004",
+      "instruction": "在项目根目录用 grep 搜索代码中定义 AgentEngine 类的文件路径，把结果写入 engine_location.txt",
+      "passed": true,
+      "check": "file contains 'engine.py'",
+      "duration_s": 7.9,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已完成。                                                                     │ │                                         ",
+      "trace": {
+        "spans": 5,
+        "llm_calls": 3,
+        "tool_calls": 2,
+        "total_tokens": 967,
+        "total_cost": 0.014616,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-005",
+      "instruction": "读取文件 mai_agent/core/models.py 的前 30 行，告诉我里面定义了哪些类，用中文回答",
+      "passed": true,
+      "check": "answer contains 'Message'",
+      "duration_s": 8.0,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 前 30 行里定义了以下两个类：                                                 │ │                                                 ",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 875,
+        "total_cost": 0.01442,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-006",
+      "instruction": "运行 python -c \"print('eval-ok-42')\" 并报告输出",
+      "passed": true,
+      "check": "answer contains 'eval-ok-42'",
+      "duration_s": 6.2,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 命令执行成功，输出结果为：                                                   │ │                                                  ",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 546,
+        "total_cost": 0.008078,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-007",
+      "instruction": "把当前工作目录的完整路径写入文件 cwd_snapshot.txt",
+      "passed": true,
+      "check": "file exists: cwd_snapshot.txt",
+      "duration_s": 6.2,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已将当前工作目录的完整路径写入 \u001b[1mcwd_snapshot.txt\u001b[0m：                            │ │                                             ",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 625,
+        "total_cost": 0.009744,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-008",
+      "instruction": "用 glob 找到项目里 mai_agent/tools 目录下所有以 file_ 开头的 Python 文件，把文件名列表写入 tool_files.txt（",
+      "passed": true,
+      "check": "file contains 'file_'",
+      "duration_s": 9.1,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已完成。在 \u001b[1mmai_agent/tools\u001b[0m 目录下找到 3 个以 \u001b[1mfile_\u001b[0m 开头的 Python             │ │ 文件，并写入 \u001b[1mtool_files.txt\u001b[0m（每行一个）",
+      "trace": {
+        "spans": 5,
+        "llm_calls": 3,
+        "tool_calls": 2,
+        "total_tokens": 972,
+        "total_cost": 0.014756,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-009",
+      "instruction": "阅读 README.md 或者项目说明，用一句话概括 MAI-agent 是什么，用中文回答",
+      "passed": true,
+      "check": "answer len=18161>=20",
+      "duration_s": 14.7,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ MAI-agent 是一个以 Claude Code 架构为基础、面向桌面端的个人开发 Agent        │ │ 平台，通过「四脑协作」（探索/校验/知识/部署规划）、知识边界管理、部署引擎和  │ │ Hook 门控等机制来",
+      "trace": {
+        "spans": 11,
+        "llm_calls": 5,
+        "tool_calls": 6,
+        "total_tokens": 16695,
+        "total_cost": 0.235648,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-010",
+      "instruction": "创建目录 eval_output 并在其中创建文件 note.txt 内容为 done",
+      "passed": true,
+      "check": "file contains 'done'",
+      "duration_s": 6.5,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已完成：创建目录 \u001b[1meval_output\u001b[0m 并在其中创建了 \u001b[1mnote.txt\u001b[0m，内容为 \u001b[1mdone\u001b[0m。          │ ╰─────────────────────────────────",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 589,
+        "total_cost": 0.008862,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-011",
+      "instruction": "在 mai_agent/core/models.py 中搜索 ToolCall 类定义在第几行，把行号写入 toolcall_line.txt",
+      "passed": true,
+      "check": "file contains '6'",
+      "duration_s": 10.8,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ \u001b[1mToolCall\u001b[0m 类定义在 \u001b[1mmai_agent/core/models.py\u001b[0m 的第 \u001b[1m64\u001b[0m 行，已将该行号写入        │ │ \u001b[1mtoolcall_line.txt\u001b[0m。 ",
+      "trace": {
+        "spans": 7,
+        "llm_calls": 4,
+        "tool_calls": 3,
+        "total_tokens": 1553,
+        "total_cost": 0.023464,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-012",
+      "instruction": "写一个 bash 脚本文件 count.sh 内容是 echo 42，然后运行它并告诉我输出",
+      "passed": true,
+      "check": "cmd exit=0 42",
+      "duration_s": 11.2,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已完成。                                                                     │ │                                         ",
+      "trace": {
+        "spans": 5,
+        "llm_calls": 3,
+        "tool_calls": 2,
+        "total_tokens": 925,
+        "total_cost": 0.013874,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-013",
+      "instruction": "查看 tests/ 目录下有哪些测试文件，说出其中一个测试文件的完整路径",
+      "passed": true,
+      "check": "answer contains 'tests'",
+      "duration_s": 18.1,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 当前项目里\u001b[1m不存在 \u001b[0m\u001b[1mtests/\u001b[0m\u001b[1m 目录\u001b[0m。                                               │ │                        ",
+      "trace": {
+        "spans": 13,
+        "llm_calls": 7,
+        "tool_calls": 6,
+        "total_tokens": 14424,
+        "total_cost": 0.204988,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-014",
+      "instruction": "修改 hello_eval.txt 的内容，追加一行 'second line'（保留原有内容）",
+      "passed": true,
+      "check": "file contains 'second line'",
+      "duration_s": 43.1,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已完成。                                                                     │ │                                         ",
+      "trace": {
+        "spans": 22,
+        "llm_calls": 11,
+        "tool_calls": 11,
+        "total_tokens": 26149,
+        "total_cost": 0.371462,
+        "tool_errors": [
+          "Read"
+        ]
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-015",
+      "instruction": "用 python 计算 1+2+...+100 的和并告诉我结果",
+      "passed": true,
+      "check": "answer contains '5050'",
+      "duration_s": 6.7,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 1 + 2 + ... + 100 的和是 \u001b[1m5050\u001b[0m。                                              │ │                                 ",
+      "trace": {
+        "spans": 3,
+        "llm_calls": 2,
+        "tool_calls": 1,
+        "total_tokens": 550,
+        "total_cost": 0.00826,
+        "tool_errors": []
+      },
+      "judge": null
+    },
+    {
+      "task_id": "mai-016",
+      "instruction": "把 mai_agent 目录下所有 .py 文件的数量写入 py_count.txt",
+      "passed": true,
+      "check": "file exists: py_count.txt",
+      "duration_s": 11.6,
+      "exit_code": 0,
+      "answer_preview": "╭───────────────────────────────── MAI-agent ──────────────────────────────────╮ │ 已完成。\u001b[1mmai_agent\u001b[0m 目录下共有 \u001b[1m70\u001b[0m 个 \u001b[1m.py\u001b[0m 文件，已写入 \u001b[1mpy_count.txt\u001b[0m。           │ ╰──────────────────────",
+      "trace": {
+        "spans": 9,
+        "llm_calls": 5,
+        "tool_calls": 4,
+        "total_tokens": 3667,
+        "total_cost": 0.052906,
+        "tool_errors": []
+      },
+      "judge": null
+    }
+  ]
+}
