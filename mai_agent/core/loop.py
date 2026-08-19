@@ -441,6 +441,23 @@ async def agent_loop(
                     await context.trace.record(span)
                 except Exception as exc:
                     logger.debug("Trace tool span failed: %s", exc)
+            # ── PostToolUse hooks（工具执行后：审计/通知/日志）──
+            try:
+                from mai_agent.hooks.executor import execute_hooks
+                from mai_agent.hooks.types import HookEvent
+                await execute_hooks(
+                    HookEvent.POST_TOOL_USE,
+                    block.name,
+                    tool_input=block.input,
+                    payload={
+                        "tool_result": mr.content,
+                        "is_error": mr.is_error,
+                        "duration_ms": exec_result.message.duration_ms,
+                        "tool_call_id": mr.tool_use_id,
+                    },
+                )
+            except Exception as exc:
+                logger.debug("PostToolUse hooks failed: %s", exc)
             # Emit progress: tool call done
             if on_progress:
                 await on_progress(StepProgress(

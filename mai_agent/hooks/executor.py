@@ -23,6 +23,7 @@ async def execute_hooks(
     tool_name: str = "",
     tool_input: dict[str, Any] | None = None,
     registry: HookRegistry | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> list[PreToolUseResult]:
     """执行所有匹配的 Hook，收集结果。
 
@@ -36,6 +37,7 @@ async def execute_hooks(
         tool_name: 工具名（PreToolUse/PostToolUse 事件需要）
         tool_input: 工具输入参数
         registry: Hook 注册表，默认全局单例
+        payload: 附加上下文（如 PostToolUse 传 result/is_error/duration_ms）
 
     Returns:
         所有 Hook 的执行结果列表
@@ -49,7 +51,17 @@ async def execute_hooks(
     results: list[PreToolUseResult] = []
     for matcher, callback in matched:
         try:
-            result = await callback(tool_name, tool_input or {})
+            # 传给 callback 的上下文: 事件 + 工具名 + 输入 + 附加 payload
+            ctx: dict[str, Any] = {"event": event.value, "tool_name": tool_name}
+            if tool_input is not None:
+                ctx["tool_input"] = tool_input
+            if payload is not None:
+                ctx.update(payload)
+            # 兼容两种签名: 新式 callback(ctx) / 旧式 callback(tool_name, tool_input)
+            try:
+                result = await callback(ctx)
+            except TypeError:
+                result = await callback(tool_name, tool_input or {})
             if result is not None:
                 results.append(result)
         except Exception as exc:
