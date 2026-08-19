@@ -75,8 +75,19 @@ class Tool(ABC):
     input_schema: type[ToolInput] = ToolInput
     is_concurrency_safe: bool = False
     """True: 此工具是只读的，可以与其他只读工具并发执行。
-    False: 此工具有写操作，必须串行执行。
-    对应 Claude Code 的 partitionToolCalls() 逻辑。"""
+    False: 此工具有写操作，默认串行。
+    参考 DeepSeek Harness 副作用分级：只读→并发；独立写入（目标可判定且不重叠）→并发；
+    共享写入/外部副作用→串行。写工具实现 write_targets() 声明目标以参与独立写入并发。"""
+
+    def write_targets(self, args: dict[str, Any]) -> list[str]:
+        """声明此工具将写入的资源目标（路径/键），用于并发冲突判定。
+
+        返回:
+          - list[str]: 将写入的目标标识（如文件路径）。多个写工具的 targets 无交集 → 可并发。
+          - []: 无写入（只读）或目标无法静态判定（如 Bash 任意命令）→ 不参与写并发。
+        默认返回 []；写工具按需覆盖。
+        """
+        return []
 
     async def execute(self, args: dict[str, Any], context: RunContext) -> ToolResult:
         """完整的工具执行管道：

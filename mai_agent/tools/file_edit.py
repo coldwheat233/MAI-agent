@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 
@@ -35,6 +36,11 @@ class FileEditTool(Tool):
     description = "对文件做精确字符串替换。old_string 必须与文件内容完全一致（含缩进）。"
     input_schema = FileEditInput
     is_concurrency_safe = False
+
+    def write_targets(self, args: dict[str, Any]) -> list[str]:
+        """声明写目标：file_path。多个 Edit/Write 写不同文件可并发。"""
+        fp = args.get("file_path") if isinstance(args, dict) else getattr(args, "file_path", "")
+        return [str(fp)] if fp else []
 
     async def call(self, input: FileEditInput, context: RunContext) -> str:
         path = resolve_path(input.file_path, context.cwd)
