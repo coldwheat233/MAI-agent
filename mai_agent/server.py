@@ -136,6 +136,7 @@ async def _init_engine_async(cwd: str = "") -> AgentEngine:
     """异步初始化引擎：同步重活放线程池，MCP 回到事件循环。"""
     engine = await asyncio.to_thread(init_engine, cwd)
     await engine.start_mcp()
+    await engine.start_trace()  # 异步上下文启动 trace recorder
     key = _norm(cwd or _ensure_config().project_root or ".")
     _engines[key] = engine
     return engine
@@ -500,6 +501,34 @@ async def api_session_detail(session_id: str):
             }
             for m in messages
         ],
+    }
+
+
+@app.get("/api/traces")
+async def api_traces_list():
+    """列出所有有 trace 的会话（含 token/成本/工具数摘要）。"""
+    from mai_agent.services.trace import list_trace_sessions
+    cwd = getattr(_config, "project_root", ".") or "."
+    return list_trace_sessions(cwd)
+
+
+@app.get("/api/traces/{session_id}")
+async def api_trace_detail(session_id: str):
+    """获取一次会话的完整 span 轨迹 + 聚合摘要。"""
+    from mai_agent.services.trace import load_trace_file, summarize_trace
+    cwd = getattr(_config, "project_root", ".") or "."
+    spans = load_trace_file(session_id, cwd)
+    if not spans:
+        # 当前内存中的 recorder（会话还活着时）
+        engine = _engines.get(_norm(cwd))
+        if engine and getattr(engine, "_trace", None) is not None:
+            spans = await engine._trace.spans_snapshot()
+    if not spans:
+        return JSONResponse({"error": "Trace not found"}, 404)
+    return {
+        "session_id": session_id,
+        "spans": spans,
+        "summary": summarize_trace(spans),
     }
 
 
@@ -913,26 +942,177 @@ async def api_feishu_config(data: dict):
     return {"ok": True, "app_id": app_id[:8] + "...", "hint": "已保存到 .env。重启后端后生效。"}
 
 
-@app.post("/api/model")
-async def api_set_model(data: dict):
-    """切换模型并重新初始化引擎。"""
-    global _config
-    model = data.get("model", "")
+@app.get("/api/providers")
+async def api_providers():
+    """列出所有 LLM provider（对齐 DSH listProviders）。"""
+    from mai_agent.llm.providers import list_providers, current_provider, KNOWN_PROTOCOLS
+    providers = list_providers()
+    cur = current_provider()
+    active_model = getattr(_ensure_config(), "llm_model", "") or cur.default_model
+    return {
+        "current": cur.name,
+        "current_model": active_model,
+        "protocols": KNOWN_PROTOCOLS,
+        "providers": [
+            {
+                "name": p.name,
+                "label": p.label,
+                "base_url": p.base_url,
+                "protocol": p.protocol,
+                "models": p.models,
+                "default_model": p.default_model,
+                "active": p.name == cur.name,
+                "has_key": bool(p.api_key),
+                "is_custom": p.is_custom,
+            }
+            for p in providers
+        ],
+    }
+
+
+@app.post("/api/providers")
+async def api_provider_create(data: dict):
+    """创建自定义 provider（对齐 DSH '添加自定义提供方' 表单）。
+
+    字段: name(Provider ID) / label(显示名称) / base_url(API 地址) /
+          protocol(API 协议) / api_key(可选) / models(可选模型目录)
+    """
+    from mai_agent.llm.providers import upsert_provider, PROVIDER_ID_RE
+    name = str(data.get("name", "")).strip()
+    if not name:
+        return JSONResponse({"error": "Provider ID 不能为空"}, 400)
+    if not PROVIDER_ID_RE.match(name):
+        return JSONResponse({"error": "Provider ID 必须以小写字母开头，只能包含小写字母/数字/连字符"}, 400)
+    if not data.get("base_url"):
+        return JSONResponse({"error": "API 地址不能为空"}, 400)
+    try:
+        p = upsert_provider(name, {
+            "label": data.get("label", name),
+            "base_url": data.get("base_url", ""),
+            "protocol": data.get("protocol", "openai-completions"),
+            "api_key": data.get("api_key", ""),
+            "models": data.get("models") or [],
+            "default_model": data.get("default_model", ""),
+        })
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, 400)
+    return p.to_dict()
+
+
+@app.put("/api/providers/{provider_name}")
+async def api_provider_update(provider_name: str, data: dict):
+    """更新 provider（填 API 密钥 / 改自定义设置 / 改模型目录）。"""
+    from mai_agent.llm.providers import upsert_provider, resolve_provider
+    existing = resolve_provider(provider_name)
+    if existing is None:
+        return JSONResponse({"error": f"未知 provider: {provider_name}"}, 404)
+    try:
+        p = upsert_provider(provider_name, {
+            "label": data.get("label"),
+            "base_url": data.get("base_url"),
+            "protocol": data.get("protocol"),
+            "api_key": data.get("api_key"),
+            "models": data.get("models"),
+            "default_model": data.get("default_model"),
+        })
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, 400)
+    return p.to_dict()
+
+
+@app.delete("/api/providers/{provider_name}")
+async def api_provider_delete(provider_name: str):
+    """删除自定义 provider（内置 provider 的覆盖记录也删，回到默认）。"""
+    from mai_agent.llm.providers import delete_provider, BUILTIN_PROVIDERS
+    if provider_name in BUILTIN_PROVIDERS:
+        # 内置 provider：只清持久化覆盖，不删除定义
+        deleted = delete_provider(provider_name)
+        return {"deleted": deleted, "builtin": True}
+    deleted = delete_provider(provider_name)
+    if not deleted:
+        return JSONResponse({"error": f"未知 provider: {provider_name}"}, 404)
+    return {"deleted": True, "builtin": False}
+
+
+@app.post("/api/models/discover")
+async def api_models_discover(data: dict):
+    """调 provider 端点发现可用模型（对齐 DSH discoverModels），并保存进模型目录。"""
+    from mai_agent.llm.providers import resolve_provider, discover_models, save_models
+    provider_name = data.get("provider", "")
+    provider = resolve_provider(provider_name)
+    if provider is None:
+        return JSONResponse({"error": f"未知 provider: {provider_name}"}, 404)
+    models = await discover_models(provider)
+    # 发现结果保存进模型目录（覆盖旧目录）
+    if models:
+        try:
+            save_models(provider_name, models, default_model=provider.default_model)
+        except Exception as exc:
+            logger.warning("保存模型目录失败: %s", exc)
+    return {"provider": provider_name, "models": models}
+
+
+@app.post("/api/providers/{provider_name}/models")
+async def api_provider_add_model(provider_name: str, data: dict):
+    """手动添加一个模型到 provider 的模型目录。"""
+    from mai_agent.llm.providers import resolve_provider, add_model
+    existing = resolve_provider(provider_name)
+    if existing is None:
+        return JSONResponse({"error": f"未知 provider: {provider_name}"}, 404)
+    model = str(data.get("model", "")).strip()
     if not model:
         return JSONResponse({"error": "模型名不能为空"}, 400)
+    add_model(provider_name, model)
+    updated = resolve_provider(provider_name)
+    return {"provider": provider_name, "models": updated.models if updated else []}
+
+
+@app.post("/api/model")
+async def api_set_model(data: dict):
+    """热切换模型——不重建引擎、不丢上下文（对齐 DSH adapter replace）。
+
+    只重配当前引擎的 LLMClient，session/messages 全保留；
+    旧的 /api/model 会重建引擎导致丢上下文，这是本实现的关键改进。
+    """
+    global _config
+    model = data.get("model", "")
+    provider_name = data.get("provider", "") or getattr(_ensure_config(), "llm_provider", "deepseek") or "deepseek"
+    if not model:
+        return JSONResponse({"error": "模型名不能为空"}, 400)
+
+    from mai_agent.llm.providers import resolve_provider
+    provider = resolve_provider(provider_name)
+    if provider is None:
+        return JSONResponse({"error": f"未知 provider: {provider_name}"}, 404)
+
+    # 更新全局配置 + 持久化 .env
+    # 注意：不写 LLM_API_KEY 到 .env——provider 的 key 由 providers.json / 环境变量管理，
+    # 写 .env 会在环境变量缺失时把真实 key 覆盖成空（曾导致启动失败）。
     _ensure_config().llm_model = model
+    _ensure_config().llm_provider = provider_name
+    _ensure_config().llm_base_url = provider.base_url
+    _ensure_config().llm_api_key = provider.api_key
     try:
         _update_env("LLM_MODEL", model)
+        _update_env("LLM_PROVIDER", provider_name)
+        _update_env("LLM_BASE_URL", provider.base_url)
     except Exception:
         pass
-    # 重建当前工作区引擎以应用新模型
-    key = _norm(_config.project_root or ".")
-    await _cancel_submit_for(key, timeout=3.0)
-    old = _engines.pop(key, None)
-    if old:
-        await old.stop()
-    engine = await _init_engine_async(_config.project_root or "")
-    return {"model": model, "session_id": engine.session_id}
+
+    # 热切换所有工作区引擎（不重建）
+    for eng in list(_engines.values()):
+        try:
+            eng.switch_model(provider_name, model)
+        except Exception as exc:
+            logger.warning("engine %s 热切换失败: %s", eng.session_id, exc)
+
+    return {
+        "model": model,
+        "provider": provider_name,
+        "session_id": _engines.get(_norm(_config.project_root or "."), {}).session_id
+        if _engines.get(_norm(_config.project_root or ".")) else None,
+        "hot_swapped": True,
+    }
 
 
 @app.post("/api/restart")

@@ -140,6 +140,16 @@ class AgentEngine:
         from mai_agent.services.structured_logger import get_logger
         self._slog = get_logger(self._session_id, self.config.cwd)
 
+        # Trace recorder（span 级轨迹采集）——只挂载不启动：
+        # engine.start() 可能在 to_thread 线程池里跑（server.init_engine），没有事件循环，
+        # 启动交给异步上下文的 start_trace()（server._init_engine_async / cli）
+        try:
+            from mai_agent.services.trace import get_recorder
+            self._trace = get_recorder(self._session_id, self.config.cwd)
+            self._run_context.trace = self._trace
+        except Exception:
+            self._trace = None
+
         # 初始化线段树记忆索引
         try:
             from mai_agent.services.memory_tags import init_tree
@@ -170,6 +180,14 @@ class AgentEngine:
             pass
 
         logger.info("会话 %s 已启动", self._session_id)
+
+    async def start_trace(self) -> None:
+        """在异步上下文中启动 trace recorder（幂等）。"""
+        if getattr(self, "_trace", None) is not None:
+            try:
+                await self._trace.start()
+            except Exception as exc:
+                logger.debug("Trace start failed: %s", exc)
 
     async def start_mcp(self) -> None:
         """在异步上下文中启动登记为 pending 的 MCP 服务器（幂等）。"""
@@ -373,12 +391,41 @@ class AgentEngine:
         if self._slog:
             self._slog.log("session_end", {"turns": self._turn_count, "tools_total": len(self._tools_called)})
             await self._slog.stop()
+        # 关闭 trace recorder（flush 剩余 spans）
+        if getattr(self, "_trace", None) is not None:
+            try:
+                from mai_agent.services.trace import close_recorder
+                await close_recorder(self._session_id, self.config.cwd)
+            except Exception as exc:
+                logger.debug("Trace close failed: %s", exc)
+            self._trace = None
 
     def set_mode(self, mode: str) -> None:
         """切换权限模式: auto | manual | plan"""
         self._run_context.permission_mode = mode
         self._loop_config.permission_mode = mode
         logger.info("会话 %s 权限模式切换为: %s", self._session_id, mode)
+
+    def switch_model(self, provider_name: str, model: str) -> None:
+        """热切换模型——不重建引擎、不丢上下文（对齐 DSH adapter replace）。
+
+        只重配 LLMClient 的 base_url/api_key/model，session/messages/工具状态全保留。
+        """
+        from mai_agent.llm.providers import resolve_provider
+        provider = resolve_provider(provider_name)
+        if provider is None:
+            raise ValueError(f"未知 provider: {provider_name}")
+        self._llm.reconfigure(
+            api_key=provider.api_key,
+            base_url=provider.base_url,
+            model=model,
+        )
+        # 同步配置（持久化由 server 层负责写 .env）
+        self.config.llm_provider = provider_name
+        self.config.llm_model = model
+        self.config.llm_base_url = provider.base_url
+        self.config.llm_api_key = provider.api_key
+        logger.info("会话 %s 热切换模型: %s / %s", self._session_id, provider_name, model)
 
     def set_brain(self, brain_type: str) -> None:
         """激活或关闭脑模式。

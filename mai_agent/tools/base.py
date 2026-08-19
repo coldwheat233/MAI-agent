@@ -48,6 +48,7 @@ class RunContext:
     active_brain: str = ""  # 当前激活的脑（空=无），如 "dev_explorer" / "dev_validator"
     abort_signal: Optional[Any] = None  # asyncio.Event or threading.Event
     stream_callback: Any = None  # async fn(text: str) -> None
+    trace: Any = None  # TraceRecorder | None — span 采集器（None 则不记录）
 
     def is_aborted(self) -> bool:
         if self.abort_signal is None:

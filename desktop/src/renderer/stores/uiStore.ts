@@ -3,11 +3,11 @@ import { create } from 'zustand'
 
 interface UIState {
   sidebarCollapsed: boolean
-  activePanel: 'none' | 'memory' | 'skills' | 'git' | 'learning'
+  activePanel: 'none' | 'memory' | 'skills' | 'git' | 'learning' | 'traces'
   isSettingsOpen: boolean
 
   toggleSidebar: () => void
-  openPanel: (panel: 'memory' | 'skills' | 'git' | 'learning') => void
+  openPanel: (panel: 'memory' | 'skills' | 'git' | 'learning' | 'traces') => void
   closePanel: () => void
   openSettings: () => void
   closeSettings: () => void
