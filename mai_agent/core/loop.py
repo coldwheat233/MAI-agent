@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable, Optional
 
@@ -227,6 +228,7 @@ async def agent_loop(
         text_buf = ""  # Batch text deltas to reduce progress events
         step_committed = False  # 本 step 的 assistant 消息尚未落进 messages
         stream_error: str | None = None  # Salvaged on mid-stream failure
+        llm_start_ms = time.monotonic()
 
         try:
             async for text_delta, tc_delta, fin, *rest in llm.chat_stream(openai_messages, tools=tools):
@@ -273,6 +275,37 @@ async def agent_loop(
             finish_reason="stop",
             usage=final_usage,
         )
+
+        # ── Trace: LLM 调用 span ──
+        # DeepSeek 流式响应通常不带 usage（include_usage 不生效），
+        # 用流式内容 + 工具参数估算 token（4 char ≈ 1 token，与 _count_context_tokens 一致）；
+        # 若 API 返回了真实 usage 则优先使用。
+        if getattr(context, "trace", None) is not None:
+            try:
+                from mai_agent.services.trace import estimate_cost, make_span
+                if final_usage is not None:
+                    in_tok = final_usage.prompt_tokens
+                    out_tok = final_usage.completion_tokens
+                else:
+                    in_tok = _count_context_tokens(messages, config.system_prompt)
+                    out_tok = (len(content_text) + sum(
+                        len(tc.function.arguments) if tc.function else 0
+                        for tc in (final_tool_calls or [])
+                    )) // 4
+                span = make_span(
+                    "llm", context.trace.session_id,
+                    model=llm.model,
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    cost=estimate_cost(llm.model, in_tok, out_tok),
+                    duration_ms=(time.monotonic() - llm_start_ms) * 1000,
+                    finish_reason=response.finish_reason,
+                    turn=step,
+                    extra={"usage_estimated": final_usage is None},
+                )
+                await context.trace.record(span)
+            except Exception as exc:
+                logger.debug("Trace llm span failed: %s", exc)
 
         # 追加 assistant 消息
         assistant_msg = AssistantMessage(
@@ -392,6 +425,22 @@ async def agent_loop(
                     tool_call_id=mr.tool_use_id,
                 )
             )
+            # ── Trace: 工具执行 span ──
+            if getattr(context, "trace", None) is not None:
+                try:
+                    from mai_agent.services.trace import make_span
+                    span = make_span(
+                        "tool", context.trace.session_id,
+                        tool_name=block.name,
+                        tool_args=block.input,
+                        result=mr.content,
+                        is_error=mr.is_error,
+                        duration_ms=exec_result.message.duration_ms,
+                        turn=step,
+                    )
+                    await context.trace.record(span)
+                except Exception as exc:
+                    logger.debug("Trace tool span failed: %s", exc)
             # Emit progress: tool call done
             if on_progress:
                 await on_progress(StepProgress(

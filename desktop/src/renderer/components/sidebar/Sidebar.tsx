@@ -9,7 +9,7 @@ import { api } from '@/lib/api'
 import { SERVER_URL } from '@/lib/constants'
 import {
   Plus, FolderPlus, ChevronRight, Folder, MessageSquare, Search, X,
-  Trash2, PanelLeft, PanelLeftClose, GitBranch, BookOpen, Brain, Settings, GraduationCap,
+  Trash2, PanelLeft, PanelLeftClose, GitBranch, BookOpen, Brain, Settings, GraduationCap, Activity,
 } from 'lucide-react'
 import type { SessionInfo } from '@/types'
 
@@ -417,6 +417,7 @@ export function Sidebar() {
           <button onClick={() => activePanel === 'skills' ? closePanel() : openPanel('skills')} className={iconClass('skills')} title="Skills"><BookOpen size={16} /></button>
           <button onClick={() => activePanel === 'learning' ? closePanel() : openPanel('learning')} className={iconClass('learning')} title="Learning Queue"><GraduationCap size={16} /></button>
           <button onClick={() => activePanel === 'git' ? closePanel() : openPanel('git')} className={iconClass('git')} title="Git"><GitBranch size={16} /></button>
+          <button onClick={() => activePanel === 'traces' ? closePanel() : openPanel('traces')} className={iconClass('traces')} title="Traces"><Activity size={16} /></button>
           <button onClick={openSettings} className="p-1.5 rounded-md text-[var(--text3)] hover:text-[var(--text2)] hover:bg-[var(--surface2)] ml-auto" title="Settings"><Settings size={16} /></button>
           <button onClick={toggleSidebar} className="p-1.5 rounded-md text-[var(--text3)] hover:text-[var(--text2)] hover:bg-[var(--surface2)]" title="Collapse"><PanelLeftClose size={16} /></button>
         </div>

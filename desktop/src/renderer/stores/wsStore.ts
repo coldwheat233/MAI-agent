@@ -8,6 +8,7 @@ interface WSState {
   status: 'connecting' | 'connected' | 'disconnected'
   reconnectAttempts: number
   serverUrl: string
+  eventTick: number  // 每条 WS 消息 +1——面板可订阅它做实时刷新（如 Traces）
 
   connect: (messageHandler: (event: ServerEvent) => void) => void
   disconnect: () => void
@@ -19,6 +20,7 @@ export const useWSStore = create<WSState>((set, get) => ({
   status: 'disconnected',
   reconnectAttempts: 0,
   serverUrl: '',
+  eventTick: 0,
 
   connect: (messageHandler) => {
     const { socket, status } = get()
@@ -40,6 +42,7 @@ export const useWSStore = create<WSState>((set, get) => ({
     ws.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data) as ServerEvent
+        set((s) => ({ eventTick: s.eventTick + 1 }))
         messageHandler(event)
       } catch (err) {
         console.error('[ws] Failed to parse message:', err)

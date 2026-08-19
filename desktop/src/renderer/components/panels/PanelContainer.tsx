@@ -4,6 +4,7 @@ import { MemoryPanel } from './MemoryPanel'
 import { SkillsPanel } from './SkillsPanel'
 import { GitPanel } from './GitPanel'
 import { LearningPanel } from './LearningPanel'
+import { TracesPanel } from './TracesPanel'
 
 export function PanelContainer() {
   const activePanel = useUIStore((s) => s.activePanel)
@@ -16,6 +17,7 @@ export function PanelContainer() {
     skills: 'Skills',
     git: 'Git',
     learning: '学习队列',
+    traces: 'Traces',
   }
 
   return (
@@ -35,6 +37,7 @@ export function PanelContainer() {
         {activePanel === 'skills' && <SkillsPanel />}
         {activePanel === 'git' && <GitPanel />}
         {activePanel === 'learning' && <LearningPanel />}
+        {activePanel === 'traces' && <TracesPanel />}
       </div>
     </div>
   )

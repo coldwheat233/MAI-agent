@@ -271,6 +271,7 @@ async def _run_once(config, user_input, session_id):
         system_prompt=build_system_prompt(AgentLoopConfig().system_prompt, project_root=config.project_root),
     ))
     engine.start()
+    await engine.start_trace()
     loaded = load_session(session_id, config.project_root or ".")
     if loaded:
         engine._messages = loaded
@@ -298,6 +299,7 @@ async def _run_repl(config, session_id):
         system_prompt=build_system_prompt(AgentLoopConfig().system_prompt, project_root=config.project_root),
     ))
     engine.start()
+    await engine.start_trace()
     loaded = load_session(session_id, config.project_root or ".")
     if loaded:
         engine._messages = loaded
