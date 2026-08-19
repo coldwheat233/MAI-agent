@@ -49,6 +49,7 @@ class RunContext:
     abort_signal: Optional[Any] = None  # asyncio.Event or threading.Event
     stream_callback: Any = None  # async fn(text: str) -> None
     trace: Any = None  # TraceRecorder | None — span 采集器（None 则不记录）
+    session_id: str = ""  # 当前会话 id（hook 审计日志等需要）
 
     def is_aborted(self) -> bool:
         if self.abort_signal is None:

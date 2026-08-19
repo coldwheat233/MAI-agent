@@ -454,6 +454,8 @@ async def agent_loop(
                         "is_error": mr.is_error,
                         "duration_ms": exec_result.message.duration_ms,
                         "tool_call_id": mr.tool_use_id,
+                        "session_id": getattr(context, "session_id", "") or "",
+                        "project_root": getattr(context, "cwd", "") or "",
                     },
                 )
             except Exception as exc:
