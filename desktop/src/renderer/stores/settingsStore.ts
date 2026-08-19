@@ -1,11 +1,13 @@
 // ── Settings Store ──────────────────────────────
 import { create } from 'zustand'
-import type { Theme, Permission, Language } from '@/types'
+import type { Theme, Permission, Language, ProviderInfo } from '@/types'
 import { DEFAULT_MODEL, DEFAULT_PERMISSION, DEFAULT_THEME, DEFAULT_LANGUAGE } from '@/lib/constants'
 import { api } from '@/lib/api'
 
 interface SettingsState {
   model: string
+  provider: string
+  providers: ProviderInfo[]
   permission: Permission
   theme: Theme
   language: Language
@@ -14,17 +16,20 @@ interface SettingsState {
   feishuHint: string
 
   // Actions
-  setModel: (model: string) => void
+  setModel: (model: string, provider?: string) => void
   setModelFromServer: (model: string) => void
   setPermission: (mode: Permission) => void
   setTheme: (theme: Theme) => void
   setLanguage: (lang: Language) => void
   fetchFeishuStatus: () => Promise<void>
+  fetchProviders: () => Promise<void>
   hydrate: () => void
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   model: DEFAULT_MODEL,
+  provider: 'deepseek',
+  providers: [],
   permission: DEFAULT_PERMISSION,
   theme: DEFAULT_THEME,
   language: DEFAULT_LANGUAGE,
@@ -32,11 +37,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   feishuAppId: '',
   feishuHint: '',
 
-  setModel: (model) => {
-    set({ model })
-    // Also persist + sync to backend
+  setModel: (model, provider) => {
+    set({ model, provider: provider || get().provider })
+    // Also persist + sync to backend（热切换，不重建引擎）
     localStorage.setItem('mai-model', model)
-    api.setModel(model).catch(() => {})
+    if (provider) localStorage.setItem('mai-provider', provider)
+    api.setModel(model, provider || get().provider).catch(() => {})
   },
 
   setModelFromServer: (model) => {
@@ -76,12 +82,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 
+  fetchProviders: async () => {
+    try {
+      const resp = await api.fetchProviders()
+      set({
+        providers: resp.providers,
+        provider: resp.current || 'deepseek',
+        model: resp.current_model || resp.providers.find((p: ProviderInfo) => p.active)?.default_model || DEFAULT_MODEL,
+      })
+    } catch {
+      // 后端不可达时保持默认
+    }
+  },
+
   hydrate: () => {
     const model = localStorage.getItem('mai-model') || DEFAULT_MODEL
+    const provider = localStorage.getItem('mai-provider') || 'deepseek'
     const perm = (localStorage.getItem('mai-perm') as Permission) || DEFAULT_PERMISSION
     const theme = (localStorage.getItem('mai-theme') as Theme) || DEFAULT_THEME
     const lang = (localStorage.getItem('mai-lang') as Language) || DEFAULT_LANGUAGE
-    set({ model, permission: perm, theme, language: lang })
+    set({ model, provider, permission: perm, theme, language: lang })
     applyTheme(theme)
   },
 }))

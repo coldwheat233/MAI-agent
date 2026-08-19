@@ -24,3 +24,24 @@ export interface CoordinatorState {
   brain: string
   status: string
 }
+
+// ── LLM Provider（对齐 DSH listProviders）──────────────
+
+export interface ProviderInfo {
+  name: string
+  label: string
+  base_url: string
+  protocol: string
+  models: string[]
+  default_model: string
+  active: boolean
+  has_key: boolean
+  is_custom: boolean
+}
+
+export interface ProvidersResponse {
+  current: string
+  current_model: string
+  protocols: string[]
+  providers: ProviderInfo[]
+}

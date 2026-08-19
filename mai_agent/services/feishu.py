@@ -56,6 +56,59 @@ class FeishuClient:
 
     # ── Wiki / Knowledge Base ──────────────────────────
 
+    async def list_spaces(self, page_size: int = 50) -> list[dict]:
+        """列出当前应用可访问的所有知识库空间（wiki spaces）。
+
+        返回: [{space_id, name, description, space_type, visibility}]
+        """
+        result = await self._request("GET", "/wiki/v2/spaces", params={"page_size": page_size})
+        items = result.get("items", [])
+        spaces = []
+        for s in items:
+            spaces.append({
+                "space_id": s.get("space_id", ""),
+                "name": s.get("name", ""),
+                "description": s.get("description", ""),
+                "space_type": s.get("space_type", ""),
+                "visibility": s.get("visibility", ""),
+            })
+        return spaces
+
+    async def list_space_docs(self, space_id: str, page_size: int = 100,
+                              max_depth: int = 5) -> list[dict]:
+        """列出知识库空间内的全部文档节点（递归遍历节点树）。
+
+        返回: [{title, node_token, obj_token, obj_type, parent_node_token, depth}]
+        """
+        results: list[dict] = []
+
+        async def _walk(parent_token: str = "", depth: int = 0):
+            if len(results) >= page_size or depth > max_depth:
+                return
+            try:
+                nodes = await self._request(
+                    "GET", f"/wiki/v2/spaces/{space_id}/nodes",
+                    params={"page_size": 50, "parent_node_token": parent_token},
+                )
+            except Exception:
+                return
+            for n in nodes.get("items", []):
+                if len(results) >= page_size:
+                    return
+                results.append({
+                    "title": n.get("title", ""),
+                    "node_token": n.get("node_token", ""),
+                    "obj_token": n.get("obj_token", ""),
+                    "obj_type": n.get("obj_type", ""),
+                    "parent_node_token": n.get("parent_node_token", ""),
+                    "depth": depth,
+                })
+                if n.get("has_child", False):
+                    await _walk(n.get("node_token", ""), depth + 1)
+
+        await _walk()
+        return results[:page_size]
+
     async def search_kb(self, query: str, page_size: int = 10) -> list[dict]:
         """Search Feishu knowledge base by traversing node tree.
 

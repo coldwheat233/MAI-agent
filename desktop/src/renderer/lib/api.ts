@@ -12,6 +12,8 @@ import type {
   BrowseResult,
   FeishuStatus,
   CoordinatorState,
+  ProvidersResponse,
+  ProviderInfo,
 } from '@/types'
 
 async function get<T>(path: string): Promise<T> {
@@ -20,9 +22,9 @@ async function get<T>(path: string): Promise<T> {
   return res.json()
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
+async function post<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   const res = await fetch(`${SERVER_URL}${path}`, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   })
@@ -68,9 +70,28 @@ export const api = {
 
   // Settings
   setMode: (mode: string) => post<{ mode: string }>('/api/mode', { mode }),
-  setModel: (model: string) => post<{ model: string }>('/api/model', { model }),
+  setModel: (model: string, provider?: string) =>
+    post<{ model: string; provider: string; hot_swapped?: boolean }>('/api/model', { model, provider }),
   setBrain: (brain: string) => post<{ brain: string }>('/api/brain', { brain }),
   setSandbox: (mode: string) => post<{ sandbox: string }>('/api/sandbox', { mode }),
+
+  // LLM Providers（对齐 DSH listProviders / discoverModels / provider 管理）
+  fetchProviders: () => get<ProvidersResponse>('/api/providers'),
+  discoverModels: (provider: string) =>
+    post<{ provider: string; models: string[] }>('/api/models/discover', { provider }),
+  createProvider: (data: {
+    name: string; label?: string; base_url: string;
+    protocol?: string; api_key?: string; models?: string[];
+  }) => post<ProviderInfo>('/api/providers', data),
+  updateProvider: (name: string, data: {
+    label?: string; base_url?: string; protocol?: string;
+    api_key?: string; models?: string[]; default_model?: string;
+  }) => post<ProviderInfo>(`/api/providers/${encodeURIComponent(name)}`, data, 'PUT'),
+  deleteProvider: (name: string) =>
+    fetch(`${SERVER_URL}/api/providers/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      .then(r => r.json()),
+  addProviderModel: (name: string, model: string) =>
+    post<{ provider: string; models: string[] }>(`/api/providers/${encodeURIComponent(name)}/models`, { model }),
 
   // Coordinator
   fetchCoordinator: () => get<CoordinatorState>('/api/coordinator'),
