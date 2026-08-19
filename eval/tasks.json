@@ -1,0 +1,170 @@
+{
+  "tasks": [
+    {
+      "task_id": "mai-001",
+      "instruction": "在当前目录下创建一个名为 hello_eval.txt 的文件，内容为 hello mai agent",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_contains",
+        "path": "hello_eval.txt",
+        "contains": "hello mai agent"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-002",
+      "instruction": "创建一个 Python 文件 sum.py，实现函数 add(a, b) 返回两数之和，并用 python 运行验证输出",
+      "workspace": ".",
+      "expected_check": {
+        "type": "cmd_exit_0",
+        "cmd": "python -c \"from sum import add; assert add(2,3)==5; print('ok')\""
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-003",
+      "instruction": "列出当前目录下所有 .py 文件，并在回答中说明共有多少个",
+      "workspace": ".",
+      "expected_check": {
+        "type": "output_contains",
+        "contains": "mai_agent"
+      },
+      "judge_mode": "llm"
+    },
+    {
+      "task_id": "mai-004",
+      "instruction": "在项目根目录用 grep 搜索代码中定义 AgentEngine 类的文件路径，把结果写入 engine_location.txt",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_contains",
+        "path": "engine_location.txt",
+        "contains": "engine.py"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-005",
+      "instruction": "读取文件 mai_agent/core/models.py 的前 30 行，告诉我里面定义了哪些类，用中文回答",
+      "workspace": ".",
+      "expected_check": {
+        "type": "output_contains",
+        "contains": "Message"
+      },
+      "judge_mode": "llm"
+    },
+    {
+      "task_id": "mai-006",
+      "instruction": "运行 python -c \"print('eval-ok-42')\" 并报告输出",
+      "workspace": ".",
+      "expected_check": {
+        "type": "output_contains",
+        "contains": "eval-ok-42"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-007",
+      "instruction": "把当前工作目录的完整路径写入文件 cwd_snapshot.txt",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_exists",
+        "path": "cwd_snapshot.txt"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-008",
+      "instruction": "用 glob 找到项目里 mai_agent/tools 目录下所有以 file_ 开头的 Python 文件，把文件名列表写入 tool_files.txt（每行一个）",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_contains",
+        "path": "tool_files.txt",
+        "contains": "file_"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-009",
+      "instruction": "阅读 README.md 或者项目说明，用一句话概括 MAI-agent 是什么，用中文回答",
+      "workspace": ".",
+      "expected_check": {
+        "type": "output_length",
+        "min_chars": 20
+      },
+      "judge_mode": "llm"
+    },
+    {
+      "task_id": "mai-010",
+      "instruction": "创建目录 eval_output 并在其中创建文件 note.txt 内容为 done",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_contains",
+        "path": "eval_output/note.txt",
+        "contains": "done"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-011",
+      "instruction": "在 mai_agent/core/models.py 中搜索 ToolCall 类定义在第几行，把行号写入 toolcall_line.txt",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_contains",
+        "path": "toolcall_line.txt",
+        "contains": "6"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-012",
+      "instruction": "写一个 bash 脚本文件 count.sh 内容是 echo 42，然后运行它并告诉我输出",
+      "workspace": ".",
+      "expected_check": {
+        "type": "cmd_exit_0",
+        "cmd": "bash count.sh 2>nul || sh count.sh 2>nul || echo skip"
+      },
+      "judge_mode": "llm"
+    },
+    {
+      "task_id": "mai-013",
+      "instruction": "查看 tests/ 目录下有哪些测试文件，说出其中一个测试文件的完整路径",
+      "workspace": ".",
+      "expected_check": {
+        "type": "output_contains",
+        "contains": "tests"
+      },
+      "judge_mode": "llm"
+    },
+    {
+      "task_id": "mai-014",
+      "instruction": "修改 hello_eval.txt 的内容，追加一行 'second line'（保留原有内容）",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_contains",
+        "path": "hello_eval.txt",
+        "contains": "second line"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-015",
+      "instruction": "用 python 计算 1+2+...+100 的和并告诉我结果",
+      "workspace": ".",
+      "expected_check": {
+        "type": "output_contains",
+        "contains": "5050"
+      },
+      "judge_mode": "auto"
+    },
+    {
+      "task_id": "mai-016",
+      "instruction": "把 mai_agent 目录下所有 .py 文件的数量写入 py_count.txt",
+      "workspace": ".",
+      "expected_check": {
+        "type": "file_exists",
+        "path": "py_count.txt"
+      },
+      "judge_mode": "auto"
+    }
+  ]
+}
