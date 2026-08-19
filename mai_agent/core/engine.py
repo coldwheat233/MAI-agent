@@ -77,11 +77,13 @@ class AgentEngine:
         # _messages 末尾一起落盘（仅作崩溃恢复用，正常返回时由 all_messages 覆盖）。
         # 不喂给 agent_loop，所以不会在 _messages 里留下空 assistant。
         self._streaming: AssistantMessage | None = None
+        self._session_id = str(uuid.uuid4())[:8]
         self._run_context = RunContext(
             cwd=config.cwd,
             permission_mode=config.permission_mode,
             active_brain=config.brain_type,
             session_state=self._init_session_state(),
+            session_id=self._session_id,
         )
         self._loop_config = AgentLoopConfig(
             max_turns=config.max_turns,
@@ -91,7 +93,6 @@ class AgentEngine:
         if config.system_prompt:
             self._loop_config.system_prompt = config.system_prompt
 
-        self._session_id = str(uuid.uuid4())[:8]
         self._turn_count = 0
         self._bg_tasks: set[asyncio.Task] = set()
 
@@ -131,6 +132,7 @@ class AgentEngine:
             permission_mode=self.config.permission_mode,
             active_brain=self.config.brain_type,
             session_state=self._init_session_state(),
+            session_id=self._session_id,
         )
         self._turn_count = 0
         self._start_time = time.monotonic()
