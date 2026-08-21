@@ -372,15 +372,33 @@ class MemorySegTree:
     def fuzzy_search(self, keyword: str, max_results: int = 30) -> list[str]:
         """全文模糊检索——在 name + description 中匹配关键词。
 
-        退化为线性扫描（带简单索引加速：仅扫 topics 包含相关分词的子树）。
+        两阶段:
+          1. tag 剪枝: 关键词直接命中某个 tag → 用 query_by_tag 缩小候选
+             （线段树 O(log n + k)，避免全量扫描）
+          2. 兜底: 无 tag 命中 / 候选不足 → 全量线性扫描
         """
         results: list[str] = []
         kw = keyword.lower()
-        for name in self.cards:
-            if self._card_matches(name, kw):
-                results.append(name)
-                if len(results) >= max_results:
-                    break
+
+        # Phase 1: 关键词 = 某个 tag 的精确命中 → 树内剪枝检索
+        if self.root is not None and kw in self.root.topics:
+            tag_hits = self.query_by_tag(kw, max_results=max_results)
+            # tag 命中还需内容验证（卡片内容必须含关键词）
+            for name in tag_hits:
+                if self._card_matches(name, kw):
+                    results.append(name)
+                    if len(results) >= max_results:
+                        return results
+
+        # Phase 2: 兜底全量扫描（关键词非 tag，或 tag 命中不足）
+        if len(results) < max_results:
+            for name in self.cards:
+                if name in results:
+                    continue
+                if self._card_matches(name, kw):
+                    results.append(name)
+                    if len(results) >= max_results:
+                        break
         return results
 
     def recent_topics(self, months: int = 3, max_topics: int = 8) -> list[str]:
