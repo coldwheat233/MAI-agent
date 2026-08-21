@@ -120,8 +120,19 @@ def _parse_date(s: str) -> Any:
 
 
 def get_tree(project_root: str = ".", refresh: bool = False) -> Any:
-    """获取指定工作区的 MemorySegTree 实例（None 表示未初始化或不可用）。"""
-    tree = _trees.get(_tree_key(project_root))
+    """获取指定工作区的 MemorySegTree 实例（None 表示不可用）。
+
+    懒初始化: 若该工作区树未建（engine 未启动过 / 其他进程），
+    自动 init_tree 建树，保证查询工具无论何时调用都能用上线段树。
+    """
+    key = _tree_key(project_root)
+    tree = _trees.get(key)
+    if tree is None:
+        try:
+            tree = init_tree(project_root)
+        except Exception as exc:
+            logger.debug("segtree 懒初始化失败: %s", exc)
+            return None
     if refresh and tree:
         tree.build()  # 从当前 cards 重建
     return tree
