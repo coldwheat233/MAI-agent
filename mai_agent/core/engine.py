@@ -70,6 +70,17 @@ class AgentEngine:
             base_url=config.llm_base_url,
             model=config.llm_model,
         )
+        # 自动容灾：当前 provider 之外的备用列表（有 key 的才当备胎）
+        try:
+            from mai_agent.llm.providers import list_providers
+            cur = getattr(config, "llm_provider", "") or "deepseek"
+            fallbacks = [
+                p for p in list_providers()
+                if p.name != cur and p.api_key and p.base_url
+            ]
+            self._llm.set_fallback_providers(fallbacks)
+        except Exception:
+            pass
         self._tools = config.tools or ToolRegistry()
         self._messages: list[Message] = []
         # 并行"流式占位 assistant"——agent_loop 内部的 assistant 还没 commit 到

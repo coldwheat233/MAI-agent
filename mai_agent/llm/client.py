@@ -132,6 +132,13 @@ class LLMClient:
             timeout=timeout,
             max_retries=0,
         )
+        # 自动容灾：主 provider 重试耗尽后，按序尝试这些备用 provider
+        # （ProviderConfig 列表，来自 providers.py；空 = 无 fallback）
+        self.fallback_providers: list[Any] = []
+
+    def set_fallback_providers(self, providers: list[Any]) -> None:
+        """设置备用 provider 列表（自动容灾用）。"""
+        self.fallback_providers = list(providers)
 
     def reconfigure(self, api_key: str = "", base_url: str = "", model: str = "") -> None:
         """热切换 provider/model——重建底层 client，保留对象身份与重试逻辑。
@@ -177,10 +184,40 @@ class LLMClient:
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> LLMResponse:
-        """单次非流式调用（带重试）。"""
-        return await _retry_loop(lambda: self._chat_impl(
-            messages, tools, temperature, max_tokens,
-        ), context=f"chat({len(messages)} msgs)")
+        """单次非流式调用（带重试 + 自动 fallback）。"""
+        return await self._call_with_fallback(
+            lambda llm: _retry_loop(
+                lambda: llm._chat_impl(messages, tools, temperature, max_tokens),
+                context=f"chat({len(messages)} msgs)",
+            ),
+            f"chat({len(messages)} msgs)",
+        )
+
+    async def _call_with_fallback(self, call_fn, context: str = ""):
+        """执行 call_fn(self)，失败后按序切换 fallback provider 重试。
+
+        主 provider 重试耗尽抛异常 → 依次 reconfigure 到备用 provider 重试，
+        全部失败才抛最终异常。对齐 DSH 的容灾思路。
+        """
+        last_exc: Exception | None = None
+        for idx, provider in enumerate([None, *self.fallback_providers]):
+            try:
+                if provider is not None:
+                    # 切到备用 provider（reconfigure 保留对象身份，engine 无需重建）
+                    logger.warning(
+                        "LLM %s 主 provider 失败，切换到 fallback[%d]: %s",
+                        context, idx - 1, provider.name,
+                    )
+                    self.reconfigure(
+                        api_key=provider.api_key,
+                        base_url=provider.base_url,
+                        model=provider.default_model or provider.models[0] if provider.models else self.model,
+                    )
+                return await call_fn(self)
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("LLM %s 尝试 provider[%d] 失败: %s", context, idx, exc)
+        raise last_exc  # type: ignore[misc]
 
     async def _chat_impl(
         self,
@@ -241,11 +278,8 @@ class LLMClient:
         # 如果在迭代过程中异常，外部 loop.py 的 async for 会捕获。
         # 这里我们把重试放在 stream 创建阶段（最常见的失败点），
         # 迭代过程中的错误由 loop.py 的 try/except 兜底。
-        stream = await _retry_loop(
-            lambda: self.client.chat.completions.create(**self._stream_kwargs(
-                messages, tools, temperature, max_tokens,
-            )),
-            context=f"chat_stream({len(messages)} msgs)",
+        stream = await self._stream_with_fallback(
+            messages, tools, temperature, max_tokens,
         )
 
         content_parts: list[str] = []
@@ -304,6 +338,33 @@ class LLMClient:
         # Yield final signal（含 usage）
         content = "".join(content_parts) if content_parts else None
         yield (None, final_tool_calls, finish_reason or "stop", final_usage)
+
+    async def _stream_with_fallback(self, messages, tools, temperature, max_tokens):
+        """流式创建阶段的重试 + fallback：主 provider 失败切备用。"""
+        context = f"chat_stream({len(messages)} msgs)"
+        last_exc: Exception | None = None
+        for idx, provider in enumerate([None, *self.fallback_providers]):
+            try:
+                if provider is not None:
+                    logger.warning(
+                        "LLM %s 主 provider 失败，切换到 fallback[%d]: %s",
+                        context, idx - 1, provider.name,
+                    )
+                    self.reconfigure(
+                        api_key=provider.api_key,
+                        base_url=provider.base_url,
+                        model=provider.default_model or self.model,
+                    )
+                return await _retry_loop(
+                    lambda: self.client.chat.completions.create(**self._stream_kwargs(
+                        messages, tools, temperature, max_tokens,
+                    )),
+                    context=context,
+                )
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("LLM %s 流式尝试 provider[%d] 失败: %s", context, idx, exc)
+        raise last_exc  # type: ignore[misc]
 
     def _stream_kwargs(
         self,
