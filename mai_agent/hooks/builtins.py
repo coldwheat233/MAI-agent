@@ -15,10 +15,55 @@ check_file_write），与 Bash 一致、按工作区隔离。
 from __future__ import annotations
 
 import logging
+import re
 
-from mai_agent.hooks.types import HookEvent, hook_registry
+from mai_agent.hooks.types import HookEvent, PreToolUseResult, hook_registry
 
 logger = logging.getLogger(__name__)
+
+
+async def _guard_dangerous_bash(ctx: dict) -> PreToolUseResult | None:
+    """PreToolUse 守卫 — 拦截 Bash 中的破坏性/危险命令。
+
+    匹配规则（大小写不敏感，命令级前缀匹配）:
+      - rm -rf / 或 rm -rf C:\\ （删除根目录/系统盘）
+      - format / mkfs（格式化磁盘）
+      - del /s /q（Windows 递归静默删除）
+      - shutdown /s /f（强制关机）
+      - rd /s /q（Windows 递归删除目录）
+    返回 deny 阻止执行，否则 None（放行）。
+    """
+    if ctx.get("tool_name") != "Bash":
+        return None
+    tool_input = ctx.get("tool_input") or {}
+    command = str(tool_input.get("command", ""))
+    if not command:
+        return None
+    cmd = command.strip().lower()
+
+    # (正则, 说明)
+    patterns: list[tuple[re.Pattern, str]] = [
+        (re.compile(r"^\s*(rm\s+(-[a-z]*\s+)*[-/]?\s*$|rm\s+.*\s+/\s*$|rm\s+-rf\s+/\s*$)"), "删除根目录"),
+        (re.compile(r"^\s*rm\s+(-[a-z]*\s+)*(\/|c:\\|d:\\|e:\\)\s*$"), "删除根目录/系统盘"),
+        (re.compile(r"^\s*rm\s+-[a-z]*r[a-z]*f[a-z]*\s+(\/|\\|[a-z]:\\?)\s*$"), "递归强制删除根目录"),
+        # 系统关键目录（绝对路径的 /home /etc /usr /var /boot /Windows /Program Files /System32）
+        (re.compile(r"^\s*rm\s+(-[a-z]*\s+)*(/home|/etc|/usr|/var|/boot|/root|/bin|/sbin)(\s|$)"), "删除系统关键目录"),
+        (re.compile(r"^\s*rm\s+(-[a-z]*\s+)*(c:\\windows|d:\\windows|.*\\system32)(\s|$)"), "删除 Windows 系统目录"),
+        (re.compile(r"^\s*(format|mkfs)[\s.]"), "格式化磁盘"),
+        (re.compile(r"^\s*del\s+/[sq]"), "Windows 递归删除"),
+        (re.compile(r"^\s*rd\s+/[sq]"), "Windows 递归删除目录"),
+        (re.compile(r"^\s*shutdown\s+.*/s\b.*/f\b"), "强制关机"),
+        (re.compile(r"^\s*(init\s+0|reboot\s*$|poweroff\s*$|halt\s*$)"), "关机/重启系统"),
+    ]
+
+    for pattern, label in patterns:
+        if pattern.match(cmd):
+            logger.warning("[guardrail] 拦截危险命令 (%s): %s", label, command[:100])
+            return PreToolUseResult(
+                decision="deny",
+                reason=f"危险命令被 Guardrail 拦截: {label}。如需执行请手动在终端操作。",
+            )
+    return None
 
 
 async def _post_tool_audit(ctx: dict) -> None:
@@ -70,4 +115,14 @@ hook_registry.register(
     tool_pattern=".*",
     source="builtin",
     priority=100,
+)
+
+# 注册内置 PreToolUse 守卫（只拦 Bash 危险命令，优先级最高先执行）
+hook_registry.register(
+    "builtin-guard-dangerous-bash",
+    _guard_dangerous_bash,
+    event=HookEvent.PRE_TOOL_USE,
+    tool_pattern="Bash",
+    source="builtin",
+    priority=10,
 )
