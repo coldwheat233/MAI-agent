@@ -3,7 +3,7 @@
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "enabled": false
+      "enabled": true
     },
     "sqlite": {
       "command": "uvx",

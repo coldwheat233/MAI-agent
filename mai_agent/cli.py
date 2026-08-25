@@ -272,6 +272,14 @@ async def _run_once(config, user_input, session_id):
     ))
     engine.start()
     await engine.start_trace()
+    # 启动 MCP 服务器并等待工具注册完成（避免 agent 开跑后 MCP 工具还没就绪）
+    try:
+        from mai_agent.tools.mcp_tools import load_mcp_config, start_mcp_servers
+        mcp_configs = load_mcp_config(config.project_root or ".")
+        if mcp_configs:
+            await start_mcp_servers(mcp_configs)
+    except Exception as exc:
+        console.print(f"[yellow]MCP 启动失败（跳过）: {exc}[/yellow]")
     loaded = load_session(session_id, config.project_root or ".")
     if loaded:
         engine._messages = loaded
@@ -300,6 +308,14 @@ async def _run_repl(config, session_id):
     ))
     engine.start()
     await engine.start_trace()
+    # 启动 MCP 服务器并等待工具注册完成（避免 agent 开跑后 MCP 工具还没就绪）
+    try:
+        from mai_agent.tools.mcp_tools import load_mcp_config, start_mcp_servers
+        mcp_configs = load_mcp_config(config.project_root or ".")
+        if mcp_configs:
+            await start_mcp_servers(mcp_configs)
+    except Exception as exc:
+        console.print(f"[yellow]MCP 启动失败（跳过）: {exc}[/yellow]")
     loaded = load_session(session_id, config.project_root or ".")
     if loaded:
         engine._messages = loaded

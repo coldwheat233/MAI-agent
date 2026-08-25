@@ -74,6 +74,10 @@ async def start_mcp_servers(configs: list[MCPServerConfig]) -> list[MCPToolWrapp
     for cfg in configs:
         if not cfg.enabled:
             continue
+        # 幂等：同一进程内该服务器已启动则跳过（engine.start fire-and-forget 与 cli await 双路径可能重复）
+        if cfg.name in _mcp_clients:
+            logger.info("MCP '%s' 已在运行，跳过", cfg.name)
+            continue
         try:
             client = MCPClient(cfg)
             await client.start()
@@ -82,7 +86,12 @@ async def start_mcp_servers(configs: list[MCPServerConfig]) -> list[MCPToolWrapp
 
             for td in tools:
                 wrapper = MCPToolWrapper(td, client)
-                registry.register(wrapper)
+                try:
+                    registry.register(wrapper)
+                except ValueError:
+                    # 工具已注册（重复注册保护），跳过但不失败
+                    logger.debug("MCP 工具已存在，跳过: %s", wrapper.name)
+                    continue
                 wrappers.append(wrapper)
                 logger.info("MCP 工具已注册: %s (%s)", wrapper.name, td.description)
 

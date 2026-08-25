@@ -71,13 +71,26 @@ class MCPClient:
             return
 
         import os as _os
+        import sys as _sys
+        from shutil import which as _which
         env = {**_os.environ, **self.config.env,
                "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
 
+        # Windows 兼容：subprocess 不解析 .cmd/.bat（npx/uvx 都是 .cmd shim），
+        # 直接 exec 会 WinError 2。用 shutil.which 找 npx.cmd 等。
+        command = self.config.command
+        args = list(self.config.args)
+        if _sys.platform == "win32":
+            resolved = _which(command)
+            if not resolved:
+                resolved = _which(f"{command}.cmd")
+            if resolved:
+                command = resolved
+
         try:
             self._process = await asyncio.create_subprocess_exec(
-                self.config.command,
-                *self.config.args,
+                command,
+                *args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
