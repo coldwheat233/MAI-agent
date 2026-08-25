@@ -63,7 +63,7 @@ class LocalTransformer(EmbeddingBackend):
                 self._model_name,
                 device="cpu",
             )
-            self._dim = self._model.get_sentence_embedding_dimension()
+            self._dim = self._model.get_embedding_dimension()
             logger.info("Loaded local embedding model: %s (dim=%d)", self._model_name, self._dim)
         except ImportError:
             raise RuntimeError(

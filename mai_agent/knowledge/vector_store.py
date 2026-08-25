@@ -98,6 +98,25 @@ class _BM25Index:
         return scores[:top_k]
 
 
+class _NoOpEmbeddingFunction:
+    """No-op embedding — 向量由外部 embedding 生成，chroma 只存储。
+
+    chroma 1.5 强制 upsert 时对 documents 调 embedding_function；此实现返回
+    全零向量占位（外部传入的真实 embeddings 会覆盖它——chroma 优先用显式
+    embeddings 参数，不用这个返回值）。
+    """
+
+    def __init__(self, dim: int = 1024):
+        self._dim = dim
+
+    def __call__(self, input):
+        import numpy as np
+        return np.zeros((len(input), self._dim), dtype=np.float32)
+
+    def name(self) -> str:
+        return "noop"
+
+
 class KnowledgeStore:
     """Hybrid search over persisted knowledge.
 
@@ -138,6 +157,7 @@ class KnowledgeStore:
                 self._collection = self._chroma.create_collection(
                     "knowledge",
                     metadata={"hnsw:space": "cosine"},
+                    embedding_function=_NoOpEmbeddingFunction(dim=dim),  # 外部生成向量，chroma 内置 embedding 占位
                 )
         except ImportError:
             self._chroma_failed = True
@@ -161,11 +181,15 @@ class KnowledgeStore:
                 vector = (await self._embedding.encode([text]))[0]
             else:
                 vector = None
+            # 文本存进 metadata（_text）供检索取回；documents 也传（chroma 1.5 强制要求，
+            # NoOp embedding 返回零向量占位，真实向量由外部 embeddings 覆盖）
+            meta = dict(metadata or {})
+            meta["_text"] = text
             self._collection.upsert(
                 ids=[doc_id],
                 documents=[text],
                 embeddings=[vector] if vector else None,
-                metadatas=[metadata or {}],
+                metadatas=[meta],
             )
 
         # Local cache
@@ -238,14 +262,16 @@ class KnowledgeStore:
         # Fetch full text for results
         results = []
         for doc_id, score in merged:
-            # Try Chroma first, fall back to local cache
+            # Try local cache first, fall back to Chroma metadata (_text)
             text = self._texts.get(doc_id, "")
             meta = self._metas.get(doc_id, {})
             if not text and self._collection is not None:
                 try:
                     chroma_result = self._collection.get(ids=[doc_id])
-                    text = chroma_result.get("documents", [""])[0] if chroma_result.get("documents") else ""
-                    meta = chroma_result.get("metadatas", [{}])[0] if chroma_result.get("metadatas") else {}
+                    chroma_metas = chroma_result.get("metadatas", [{}])[0] if chroma_result.get("metadatas") else {}
+                    if isinstance(chroma_metas, dict):
+                        text = chroma_metas.get("_text", "")
+                        meta = {k: v for k, v in chroma_metas.items() if k != "_text"}
                 except Exception:
                     pass
             results.append({
