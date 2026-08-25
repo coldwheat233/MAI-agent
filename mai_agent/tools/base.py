@@ -127,14 +127,37 @@ class Tool(ABC):
         对应 Claude Code 的 tools_schema 构建逻辑。
         """
         schema = self.input_schema.model_json_schema()
+
+        def _short(s: str, n: int) -> str:
+            """截断到 n 字符（不切多字节字符），过长加省略号。"""
+            if len(s) <= n:
+                return s
+            truncated = s[:n]
+            while truncated:
+                try:
+                    truncated.encode("utf-8")
+                    break
+                except UnicodeEncodeError:
+                    truncated = truncated[:-1]
+            return truncated.rstrip() + "…"
+
+        # 压缩: 去 pydantic 冗余 title + 工具描述 ≤120 字符、参数描述 ≤60 字符（省上下文 token）
+        properties = {}
+        for pname, pmeta in (schema.get("properties") or {}).items():
+            props = dict(pmeta)
+            props.pop("title", None)  # pydantic 生成的 "Title": "Output Mode" 纯冗余
+            if props.get("description"):
+                props["description"] = _short(str(props["description"]), 60)
+            properties[pname] = props
+
         return {
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": self.description,
+                "description": _short(self.description, 120),
                 "parameters": {
                     "type": "object",
-                    "properties": schema.get("properties", {}),
+                    "properties": properties,
                     "required": schema.get("required", []),
                 },
             },
