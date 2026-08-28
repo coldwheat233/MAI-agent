@@ -480,6 +480,95 @@ Electron 33 桌面应用，集成所有功能。支持暗色/亮色/系统主题
 
 ---
 
+## Skill 体系设计
+
+参考 AI-Meeting 的 Skills 知识体系设计（分层路由 + 脚本扫包 + 不可破坏约束），MAI-agent 用 Skill 把"Python 模块的隐性规则"变成"AI 改代码前自动加载的上下文"。
+
+### 分层架构
+
+```
+                     ┌─────────────────────┐
+                     │  mai-repo-map       │  ← 路由层：需求属于哪个模块
+                     └─────────┬───────────┘
+                               │ 路由后切到具体 Skill
+             ┌─────────────────┼──────────────────┐
+             │                 │                  │
+   ┌─────────┴──────┐ ┌───────┴──────┐ ┌─────────┴────────┐
+   │ core-loop      │ │ tools-*      │ │  services-*      │  ← 领域层：按模块分组
+   └─────────┬──────┘ └───────┬──────┘ └─────────┬────────┘
+             │                │                  │
+             │        ┌───────┴──────┐           │
+             │        │ knowledge-*  │           │  ← 知识/记忆域
+             │        └──────────────┘           │
+   ┌─────────┴──────────────────────────┬────────┴────────┐
+   │  mai-change-playbook               │  mai-debug-playbook │  ← 操作层
+   └────────────────────────────────────┴─────────────────┘
+```
+
+### 标准结构（每个 Skill 目录）
+
+```
+skills/mai-{domain}/
+├── SKILL.md              ← 触发条件 / 使用顺序 / 必守约束 / 关键入口
+├── references/           ← 详细参考
+│   ├── module-map.md     ← 模块职责与依赖（可脚本生成）
+│   ├── invariants.md     ← 不可破坏的约束（改代码前红线清单）
+│   ├── gotchas.md        ← 已知的坑（改相关代码时避开）
+│   └── generated-*.md    ← scripts 自动扫描生成的同步文档
+└── scripts/              ← Python 脚本，自动扫描源码
+    └── extract_*.py
+```
+
+**SKILL.md 回答四个问题**：什么时候用（触发条件）、按什么顺序读（使用顺序）、哪些绝对不能破坏（必守约束）、核心文件在哪（关键入口）。并声明"不要用我做什么"的负向边界。
+
+### 脚本扫包（代码与文档同源）
+
+`scripts/extract_module_map.py` 扫描 `mai_agent/` 目录，自动生成 `references/generated-module-map.md`（模块摘要索引 + 依赖关系 + 关键入口），保证文档与代码同步：
+
+```bash
+python skills/scripts/extract_module_map.py    # 一键重新生成模块摘要
+```
+
+与 AI-Meeting 的 `extract_api_index.py` 同一思路：人力只维护规则/约束类文档（invariants/gotchas），生成类文档（模块索引）由脚本产出，减少信息衰减。
+
+### 各模块摘要（垂直设计速览）
+
+| 模块 | 职责 | 关键入口 |
+|---|---|---|
+| `mai_agent/core/loop.py` | Agent 主循环（思考-行动-观察） | `agent_loop()`，所有工具调用的编排中枢 |
+| `mai_agent/core/engine.py` | 会话引擎（状态/生命周期/热切换） | `AgentEngine.start()/submit()/stop()` |
+| `mai_agent/tools/registry.py` | 工具注册表（mode 过滤 + schema 生成） | `ToolRegistry.register()/to_openai_schemas()` |
+| `mai_agent/tools/orchestration.py` | 工具编排（副作用分级并发） | `run_tools()`，只读/独立写并发、共享写串行 |
+| `mai_agent/hooks/` | Hook 体系（Pre/PostToolUse + disposer） | `can_use_tool()`，`hook_registry.register()` 返回撤销函数 |
+| `mai_agent/llm/providers.py` | Provider 注册表（多服务商 + 热切换） | `list_providers()/resolve_provider()` |
+| `mai_agent/llm/client.py` | LLM 客户端（重试 + fallback） | `chat()/chat_stream()`，`reconfigure()` |
+| `mai_agent/services/trace.py` | span 级轨迹采集 | `TraceRecorder.record()`，jsonl 落盘 |
+| `mai_agent/services/memory_*.py` | 记忆体系（流水/卡片/线段树） | `save_memory()/get_tree()` |
+| `mai_agent/knowledge/` | 知识引擎（BM25+向量混合检索） | `KnowledgeStore.search()` |
+| `mai_agent/tools/mcp_tools.py` | MCP 懒加载代理 | `McpTool`（list+call 两步） |
+
+### 修改注意事项（不可破坏约束）
+
+- **`core/loop.py`**：LLM 的 assistant(tool_calls) 消息后必须紧跟等量 tool 回复，否则 API 400——删除消息时必须走 `strip_incomplete_tool_calls()`，不能直接截断中间段。
+- **`tools/orchestration.py`**：写工具要参与并发必须实现 `write_targets()` 声明写目标；无法判定目标的工具（Bash）默认串行——不要改成无条件并发。
+- **`hooks/`**：所有 `register()` 返回 disposer（撤销函数），新增内置 hook 必须用 disposer 模式注册；`execute_hooks` 兼容新旧两种 callback 签名，别破坏。
+- **`llm/client.py`**：重试耗尽后自动 fallback 到备用 provider；**不要把 API key 写进 .env**（会覆盖真实 key 导致启动失败），key 归 providers.json/环境变量管。
+- **`llm/providers.py`**：Provider ID 必须以小写字母开头（`^[a-z][a-z0-9-]*$`），非 deepseek provider 不继承 .env 的 key。
+- **`services/trace.py`**：DeepSeek 流式不带 usage，token 用 4char≈1token 估算——别依赖真实 usage 字段。
+- **`services/memory_segtree.py`**：插入是 O(log n) 路径更新（懒标记 dirty）；中间插入/扩容 O(n) 重建——保持不变量（card_count、topics 并集）别破坏。
+- **`knowledge/vector_store.py`**：chroma 1.5 对 documents 必调 embedding_function，必须用 `_NoOpEmbeddingFunction` 占位 + 外部向量覆盖；文本存 `metadata._text`。
+- **`tools/mcp_tools.py`**：MCP 工具走懒加载代理（McpTool），不注册具体 `mcp__*` 工具进 schema（会占上下文）；cli 路径必须 await `start_mcp_servers` 等注册完成。
+- **`.mcp.json`**：Windows 下 npx/uvx 是 .cmd shim，配置 command 用 `npx`/`uvx` 即可（代码已用 `shutil.which` 解析）。
+
+### 设计理念
+
+1. **分层不叠加**：repo-map 路由 → 领域 Skill 指导 → 变更/排障剧本处理跨域——每层职责单一、单向依赖。
+2. **被动文档变主动上下文**：SKILL.md 的 frontmatter 触发条件让 AI 自动加载对应模块约束，不是等人去翻 Wiki。
+3. **不可破坏约束优先**：invariants 是"改了就会炸"的硬性红线，相当于人肉编译器。
+4. **代码与文档同源共生**：改代码同步改对应 Skill；生成类文档（模块索引）由 `extract_module_map.py` 脚本产出。
+
+---
+
 ## 开发指南
 
 ### 目录结构
