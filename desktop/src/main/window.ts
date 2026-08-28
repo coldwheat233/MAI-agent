@@ -3,6 +3,7 @@
  */
 import { app, BrowserWindow, shell } from 'electron'
 import path from 'path'
+import { makeBrandIcon } from './icon'
 
 const SERVER_PORT = parseInt(process.env.MAI_PORT || '8765')
 const SERVER_URL = `http://localhost:${SERVER_PORT}`
@@ -16,6 +17,7 @@ export async function createWindow(): Promise<BrowserWindow> {
     minWidth: 900,
     minHeight: 600,
     title: 'MAI-agent Desktop',
+    icon: makeBrandIcon(256), // 任务栏/窗口图标 — 与托盘同一品牌图标
     backgroundColor: '#0f1117',
     show: false,
     webPreferences: {
