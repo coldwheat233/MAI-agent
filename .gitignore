@@ -18,9 +18,8 @@ __pycache__/
 .mai/workspaces/
 .mai/mai.db
 .mai/workspaces.json
-# ddo-code-flow 运行产物（runs/*）不入库，只保留 skill 定义本身
-.mai/skills/ddo-code-flow/.ddo/runs/
-.mai/skills/ddo-code-flow/assets/
+# 独立 skill 项目不入库（ddo-code-flow 是独立项目，仅本地保留）
+.mai/skills/ddo-code-flow/
 dist/
 build/
 *.egg-info/
