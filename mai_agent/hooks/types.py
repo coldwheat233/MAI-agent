@@ -83,8 +83,12 @@ class HookRegistry:
         tool_pattern: str = ".*",
         source: str = "user",
         priority: int = 50,
-    ) -> None:
-        """注册一个 Hook。
+    ) -> Callable[[], None]:
+        """注册一个 Hook，返回撤销函数（disposer）。
+
+        对齐 Cordis 的 disposer 模式: 每个注册返回一个撤销句柄，
+        调用它可单独卸载该 hook（O(1)），无需 clear() 全清。
+        重复注册同名 hook 时，旧 matcher 先被撤销（hot-reload 语义）。
 
         Args:
             name: 唯一名称
@@ -93,6 +97,9 @@ class HookRegistry:
             tool_pattern: 匹配工具名的正则（如 "Bash|Edit|Write"）
             source: 来源 (user/plugin/skill)
             priority: 优先级（越小越先执行）
+
+        Returns:
+            dispose 函数——调用后该 hook 从注册表移除（幂等）。
         """
         matcher = HookMatcher(
             event=event,
@@ -101,8 +108,29 @@ class HookRegistry:
             source=source,
             priority=priority,
         )
+        # 同名已有 hook → 先撤销（Cordis hot-reload 语义：重注册 = 替换）
+        existing = [i for i, m in enumerate(self._matchers) if m.hook_name == name]
+        for idx in reversed(existing):
+            del self._matchers[idx]
         self._matchers.append(matcher)
         self._callbacks[name] = callback
+
+        disposed = False
+
+        def dispose() -> None:
+            """撤销此 hook（幂等）。"""
+            nonlocal disposed
+            if disposed:
+                return
+            disposed = True
+            try:
+                self._matchers.remove(matcher)
+            except ValueError:
+                pass
+            if self._callbacks.get(name) is callback:
+                self._callbacks.pop(name, None)
+
+        return dispose
 
     def match(
         self,
