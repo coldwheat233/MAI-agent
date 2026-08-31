@@ -312,7 +312,11 @@ class AgentEngine:
         return final_answer, self._messages
 
     def _refresh_system_prompt(self) -> None:
-        """重建 system prompt（同步，含 git/文件 I/O——调用方负责放线程池）。"""
+        """重建 system prompt（同步，含 git/文件 I/O——调用方负责放线程池）。
+
+        预算模式: max_context*0.8 - 当前消息 tokens = system prompt 可用预算，
+        由 ContextAssembler 按优先级裁剪各附加层（长上下文管理）。
+        """
         from mai_agent.context import build_system_prompt, get_system_context, get_user_context
         get_system_context.cache_clear()
         get_user_context.cache_clear()
@@ -320,8 +324,20 @@ class AgentEngine:
         base = self._loop_config.system_prompt.split('当前日期:')[0].strip() if self._loop_config.system_prompt else ""
         if not base:
             base = self._loop_config.system_prompt
+
+        # 估算当前消息 tokens（供预算计算）
+        messages_tokens = 0
+        try:
+            from mai_agent.core.loop import _count_context_tokens
+            messages_tokens = _count_context_tokens(self._messages, "")
+        except Exception:
+            pass
+        max_ctx = getattr(self._loop_config, "max_context_tokens", 100_000)
+
         self._loop_config.system_prompt = build_system_prompt(
             base, project_root=self.config.cwd,
+            budget_tokens=max_ctx,
+            messages_tokens=messages_tokens,
         )
 
     async def _extract_memory(self) -> None:

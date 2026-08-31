@@ -128,56 +128,96 @@ def build_system_prompt(
     base_prompt: str,
     project_root: Optional[str] = None,
     brain_type: Optional[str] = None,
+    budget_tokens: Optional[int] = None,
+    messages_tokens: int = 0,
 ) -> str:
-    """组装完整的 system prompt — 三层上下文合并。
+    """组装完整的 system prompt — 分层 + 可选预算管理。
 
     对应 Claude Code: system prompt 的组装逻辑。
+
+    预算模式（budget_tokens 传入时）:
+      用 ContextAssembler 按优先级三档降级各附加层，避免全量拼接超限。
+      不传预算时保持原行为（全量拼接，向后兼容）。
     """
-    parts: list[str] = [base_prompt]
-
-    # Layer 1: System context
+    # ── 提取各层内容 ─────────────────────────────────
     sys_ctx = get_system_context(project_root)
+    sys_parts: list[str] = []
     if "currentDate" in sys_ctx:
-        parts.append(f"当前日期: {sys_ctx['currentDate']}")
+        sys_parts.append(f"当前日期: {sys_ctx['currentDate']}")
     if "cwd" in sys_ctx:
-        parts.append(f"当前工作目录: {sys_ctx['cwd']}")
+        sys_parts.append(f"当前工作目录: {sys_ctx['cwd']}")
     if "gitStatus" in sys_ctx:
-        parts.append(f"\nGit 状态:\n{sys_ctx['gitStatus']}")
+        sys_parts.append(f"\nGit 状态:\n{sys_ctx['gitStatus']}")
+    system_context_text = "\n".join(sys_parts)
 
-    # Layer 2: User context
     user_ctx = get_user_context(project_root)
-    if user_ctx.get("claudeMd"):
-        parts.append(f"\n项目配置:\n{user_ctx['claudeMd']}")
+    claude_md_text = user_ctx.get("claudeMd", "")
 
-    # Layer 2.5: Session Memory (from previous conversations)
     from mai_agent.services.memory import memory_context_for_prompt
     mem_ctx = memory_context_for_prompt(project_root or ".")
-    if mem_ctx:
-        parts.append(mem_ctx)
 
-    # Layer 2.55: Tagged long-term memories (Claude Code 记忆模型)
+    tagged_ctx = ""
     try:
         from mai_agent.services.memory_tags import tagged_memory_context
-        tm_ctx = tagged_memory_context(project_root or ".")
-        if tm_ctx:
-            parts.append(tm_ctx)
+        tagged_ctx = tagged_memory_context(project_root or ".")
     except Exception:
         pass
 
-    # Layer 2.6: Skills (available-skill listing — one line each)
-    # 对应 Claude Code 的 available-skills 注入
+    skills_listing = ""
     try:
         from mai_agent.skills.loader import get_skill_registry
-        skill_listing = get_skill_registry(project_root or ".").listing()
-        if skill_listing:
-            parts.append(skill_listing)
+        skills_listing = get_skill_registry(project_root or ".").listing()
     except Exception:
-        pass  # skill 系统不可用不应阻断启动
+        pass
 
-    # Layer 3: Brain context (动态)
+    brain_context = ""
     if brain_type:
         brain_ctx = get_brain_context(brain_type)
-        if "brainContext" in brain_ctx:
-            parts.append(f"\n{brain_ctx['brainContext']}")
+        brain_context = brain_ctx.get("brainContext", "")
+
+    # ── 预算模式：ContextAssembler 按优先级裁剪 ──────
+    if budget_tokens is not None:
+        from mai_agent.services.context_asm import ContextAssembler, LayerSpec, truncate_render
+
+        asm = ContextAssembler(max_context=budget_tokens, budget_ratio=1.0)
+        layers: list[LayerSpec] = []
+        # P2: 会话记忆（最重要附加层）
+        if mem_ctx:
+            layers.append(LayerSpec(id="session_memory", priority=20,
+                                    render=truncate_render(mem_ctx, 1500)))
+        # P2: 标签记忆
+        if tagged_ctx:
+            layers.append(LayerSpec(id="tagged_memory", priority=30,
+                                    render=truncate_render(tagged_ctx, 1000)))
+        # P2: 项目配置
+        if claude_md_text:
+            layers.append(LayerSpec(id="project_config", priority=40,
+                                    render=truncate_render(claude_md_text, 800)))
+        # P2.5: skills
+        if skills_listing:
+            layers.append(LayerSpec(id="skills", priority=50,
+                                    render=truncate_render(skills_listing, 800)))
+        # P3: 系统上下文（git/日期）
+        if system_context_text:
+            layers.append(LayerSpec(id="system_context", priority=60,
+                                    render=truncate_render(system_context_text, 300)))
+
+        return asm.assemble(layers, messages_tokens,
+                            base_prompt=base_prompt, brain_context=brain_context)
+
+    # ── 原行为：全量拼接 ──────────────────────────────
+    parts: list[str] = [base_prompt]
+    if system_context_text:
+        parts.append(system_context_text)
+    if claude_md_text:
+        parts.append(f"\n项目配置:\n{claude_md_text}")
+    if mem_ctx:
+        parts.append(mem_ctx)
+    if tagged_ctx:
+        parts.append(tagged_ctx)
+    if skills_listing:
+        parts.append(skills_listing)
+    if brain_context:
+        parts.append(f"\n{brain_context}")
 
     return "\n\n".join(parts)
