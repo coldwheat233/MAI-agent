@@ -261,6 +261,12 @@ def save_memory(memory: TaggedMemory, project_root: str = ".") -> str:
     rebuild_index(project_root)
     _maybe_insert_tree(memory.name, memory.description, memory.tags,
                        memory.created_at, project_root)
+    # 同步向量索引（语义检索）——失败不阻断主流程
+    try:
+        from mai_agent.services.memory_vector import index_card
+        index_card(memory, project_root)
+    except Exception:
+        pass
     logger.info("记忆已保存: %s (tags=%s)", memory.name, memory.tags)
     return str(path)
 
@@ -273,6 +279,12 @@ def delete_memory(name: str, project_root: str = ".") -> bool:
     path.unlink()
     rebuild_index(project_root)
     _maybe_remove_tree(name, project_root)
+    # 同步删除向量索引
+    try:
+        from mai_agent.services.memory_vector import remove_card
+        remove_card(name, project_root)
+    except Exception:
+        pass
     return True
 
 
@@ -368,24 +380,41 @@ def search_by_daterange(start: Optional[str], end: Optional[str],
 
 
 def search(query: str, project_root: str = ".") -> list[TaggedMemory]:
-    """简单全文检索：优先用 segtree，无树时全量扫描。"""
-    # 优先 segtree
+    """混合检索：关键词（segtree/扫描）+ 向量语义召回（memory_vector）。
+
+    关键词优先（精确匹配），向量补召回（语义相近但无关键词命中）。
+    """
+    # 1. 关键词检索（现有逻辑）
+    keyword_hits: list[TaggedMemory] = []
     tree = get_tree(project_root)
     if tree is not None:
         names = tree.fuzzy_search(query)
-        results = [load_memory_by_name(n, project_root) for n in names]
-        return [m for m in results if m is not None]
+        keyword_hits = [load_memory_by_name(n, project_root) for n in names]
+        keyword_hits = [m for m in keyword_hits if m is not None]
+    else:
+        q = query.lower()
+        for m in load_all_memories(project_root):
+            haystack = " ".join([
+                m.name, m.description, " ".join(m.tags), m.content,
+            ]).lower()
+            if q in haystack:
+                keyword_hits.append(m)
 
-    # 降级：全量线性扫描
-    q = query.lower()
-    results = []
-    for m in load_all_memories(project_root):
-        haystack = " ".join([
-            m.name, m.description, " ".join(m.tags), m.content,
-        ]).lower()
-        if q in haystack:
-            results.append(m)
-    return results
+    # 2. 向量语义召回（新增）——补关键词没命中的
+    semantic_hits: list[TaggedMemory] = []
+    try:
+        from mai_agent.services.memory_vector import semantic_search
+        semantic_hits = semantic_search(query, project_root)
+    except Exception:
+        pass  # 向量不可用则纯关键词
+
+    # 3. 合并去重：关键词优先，语义补缺
+    seen = {m.name for m in keyword_hits}
+    for m in semantic_hits:
+        if m.name not in seen:
+            keyword_hits.append(m)
+            seen.add(m.name)
+    return keyword_hits
 
 
 def all_tags(project_root: str = ".") -> list[str]:
