@@ -451,6 +451,51 @@ def delete_session(session_id: str, project_root: str = ".") -> bool:
         return cur.rowcount > 0
 
 
+async def purge_session(session_id: str, project_root: str = ".") -> dict[str, Any]:
+    """删除会话及其 L1 原文副本（日志/轨迹 jsonl）——敏感信息级联清理。
+
+    敏感残留分层策略（与 .mai/skills/mai-services 的 SKILL 文档一致）:
+      L0 会话原文   → 本函数删 SQLite 行（messages 由 FK ON DELETE CASCADE 级联）
+      L1 原文副本   → 先关进程内写句柄（StructuredLogger/TraceRecorder），
+                      再删该工作区 .mai/logs|traces/<session_id>.jsonl
+      L2 流水摘要   → SESSION_MEMORY.md 为多会话聚合产物，不随单会话删除
+                      （无 provenance 无法精确回滚单会话贡献）
+      L3 显式知识   → 记忆卡片/段树/向量/学习队列是跨会话长期知识，不随会话
+                      删除；需 MemoryDelete（卡片粒度）或手动重置
+
+    Returns:
+        {"deleted": bool, "session_id": ..., "deleted_files": [绝对路径...]}
+    """
+    ws = get_session_workspace(session_id, project_root) or ""
+    deleted_files: list[str] = []
+    if ws:
+        # 关写句柄：防正在写的 writer 与 unlink 竞态（Windows 句柄占用）
+        try:
+            from mai_agent.services.structured_logger import close_logger
+            await close_logger(session_id, ws)
+        except Exception:
+            pass
+        try:
+            from mai_agent.services.trace import close_recorder
+            await close_recorder(session_id, ws)
+        except Exception:
+            pass
+        for sub in ("logs", "traces"):
+            p = Path(ws) / ".mai" / sub / f"{session_id}.jsonl"
+            try:
+                if p.exists():
+                    p.unlink()
+                    deleted_files.append(str(p))
+            except Exception:
+                pass
+    ok = delete_session(session_id)
+    return {
+        "deleted": ok,
+        "session_id": session_id,
+        "deleted_files": deleted_files,
+    }
+
+
 def search_sessions(keyword: str, project_root: str = ".") -> list[dict[str, Any]]:
     """跨所有 workspace 按 keyword 搜 messages.content。"""
     kw = keyword.lower()

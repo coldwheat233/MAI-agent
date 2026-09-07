@@ -1,7 +1,7 @@
 # Generated Module Map（自动生成，勿手改 — 运行 extract_module_map.py 重新生成）
 
-扫描时间: 2026-08-28T21:21:38
-模块总数: 71 | 总行数: 14277
+扫描时间: 2026-09-07T16:40:54
+模块总数: 73 | 总行数: 14924
 
 ## 模块摘要
 
@@ -16,25 +16,6 @@
 `四脑系统入口`
 
 行数: 1
-
----
-
-### brains/coordinator.py
-`Coordinator — 四脑调度状态机。`
-
-类:
-- `BrainState` — (无文档)
-- `CoordinatorContext` — Mutable state tracked across the brain lifecycle.
-- `Coordinator` — Orchestrates the four-brain lifecycle.
-
-函数:
-- `parse_verdict()` — Parse a brain's output to determine the verdict.
-- `status_bar()` — Generate a structured status summary for injection into LLM context.
-- `start()` — (无文档)
-
-依赖: `mai_agent.brains.definitions`, `mai_agent.core.models`, `mai_agent.llm.client`, `mai_agent.tools.base`, `mai_agent.tools.orchestration`, `mai_agent.tools.registry`
-
-行数: 407
 
 ---
 
@@ -55,7 +36,7 @@
 
 依赖: `mai_agent.config`, `mai_agent.context`, `mai_agent.core.engine`, `mai_agent.core.loop`, `mai_agent.server`, `mai_agent.session`, `mai_agent.skills.loader`, `mai_agent.tools`, `mai_agent.tools.bash`, `mai_agent.tools.mcp_tools`
 
-行数: 609
+行数: 689
 
 ---
 
@@ -80,11 +61,11 @@
 - `get_system_context()` — 每会话缓存的系统上下文。
 - `get_user_context()` — 每会话缓存的用户/项目上下文。
 - `get_brain_context()` — 脑模式专用上下文注入。
-- `build_system_prompt()` — 组装完整的 system prompt — 三层上下文合并。
+- `build_system_prompt()` — 组装完整的 system prompt — 分层 + 可选预算管理。
 
-依赖: `mai_agent.services.memory`, `mai_agent.services.memory_tags`, `mai_agent.skills.loader`
+依赖: `mai_agent.services.context_asm`, `mai_agent.services.memory`, `mai_agent.services.memory_tags`, `mai_agent.skills.loader`
 
-行数: 183
+行数: 223
 
 ---
 
@@ -106,13 +87,13 @@
 - `start()` — 初始化会话。重置所有状态。
 - `set_mode()` — 切换权限模式: auto | manual | plan
 - `switch_model()` — 热切换模型——不重建引擎、不丢上下文（对齐 DSH adapter replace）。
-- `set_brain()` — 激活或关闭脑模式。
-- `coordinator_status()` — 获取当前协调器状态栏文本（用于注入 system prompt 或前端展示）。
+- `set_brain()` — 激活或关闭脑模式（只做角色 prompt 注入开关）。
 - `snapshot_messages()` — 存盘用的快照：self._messages +（若存在）流式占位 _streaming。
+- `messages()` — (无文档)
 
-依赖: `mai_agent.brains.coordinator`, `mai_agent.context`, `mai_agent.core.loop`, `mai_agent.core.models`, `mai_agent.knowledge.concept_detector`, `mai_agent.knowledge.learning_queue`, `mai_agent.knowledge.vector_store`, `mai_agent.llm.client`, `mai_agent.llm.providers`, `mai_agent.plugins.loader`
+依赖: `mai_agent.context`, `mai_agent.core.loop`, `mai_agent.core.models`, `mai_agent.knowledge.concept_detector`, `mai_agent.knowledge.learning_queue`, `mai_agent.knowledge.vector_store`, `mai_agent.llm.client`, `mai_agent.llm.providers`, `mai_agent.plugins.loader`, `mai_agent.sandbox.policy`
 
-行数: 520
+行数: 569
 
 ---
 
@@ -367,13 +348,15 @@
 
 函数:
 - `load_plugins()` — 扫描 .mai/plugins/ 并加载所有启用的 plugin。
+- `get_plugin_mcp_servers()` — 返回 plugin 通过 mcp_config.json 注册的 mcpServers（浅拷贝）。
 - `get_plugin_registry()` — (无文档)
 - `reload_plugins()` — (无文档)
 - `add()` — (无文档)
 - `get()` — (无文档)
-- `all()` — (无文档)
 
-行数: 187
+依赖: `mai_agent.skills.loader`
+
+行数: 215
 
 ---
 
@@ -414,7 +397,7 @@
 
 依赖: `mai_agent`, `mai_agent.config`, `mai_agent.context`, `mai_agent.core.engine`, `mai_agent.core.loop`, `mai_agent.core.models`, `mai_agent.knowledge.learning_queue`, `mai_agent.llm.providers`, `mai_agent.services.feishu`, `mai_agent.services.memory_tags`
 
-行数: 1142
+行数: 1133
 
 ---
 
@@ -425,13 +408,45 @@
 
 ---
 
+### services/context_asm.py
+`Context Assembly — 预算驱动的上下文组装（长上下文管理）。`
+
+类:
+- `LayerSpec` — 一层上下文的规格：id / 优先级 / 三档渲染器。
+- `ContextAssembler` — 预算驱动组装器。
+
+函数:
+- `truncate_render()` — 把一段文本包成三档渲染器: full=原文, summary=截断, omit=""。
+- `assemble()` — 按预算组装 system prompt。
+- `report()` — 组装统计（调试/面试可展示）。
+- `render()` — (无文档)
+
+行数: 136
+
+---
+
+### services/cron_scheduler.py
+`Cron 调度器 — 真正执行 .mai/cron.json 里登记的定时任务（闭环 P0-2）。`
+
+函数:
+- `parse_cron()` — 解析 5 字段 cron 表达式。
+- `next_fire()` — 返回 parsed 在 after（不含）之后的第一个触发时刻（分钟精度）。
+- `ensure_cron_scheduler()` — 确保该 engine 工作区有一个活跃调度器。
+- `stop_cron_scheduler()` — 取消该工作区的调度器（由启动它的 engine 在 stop 时调用）。
+
+依赖: `mai_agent.core.loop`, `mai_agent.tools.base`
+
+行数: 317
+
+---
+
 ### services/feishu.py
 `Feishu/Lark API client — tenant token auth, wiki docs, search.`
 
 类:
 - `FeishuClient` — Minimal Feishu client — get token, search docs, read/write docs.
 
-行数: 451
+行数: 505
 
 ---
 
@@ -500,9 +515,18 @@
 - `tag_index_path()` — (无文档)
 - `load_memory_by_name()` — 按 name 加载一条记忆卡片。
 
-依赖: `mai_agent.services.memory_segtree`
+依赖: `mai_agent.services.memory_segtree`, `mai_agent.services.memory_vector`
 
-行数: 474
+行数: 513
+
+---
+
+### services/memory_vector.py
+`卡片向量索引 — 让"我做过的东西"支持语义检索（向量 + 关键词混合）。`
+
+依赖: `mai_agent.knowledge.embedding`, `mai_agent.knowledge.vector_store`, `mai_agent.services.memory_tags`
+
+行数: 130
 
 ---
 
@@ -575,13 +599,13 @@
 
 函数:
 - `load_skills()` — 扫描项目级 + 用户级 skill 目录，构建注册表。
+- `register_extra_skill_dir()` — Plugin 把自有 skill 目录注册进扫描路径，并清缓存使下次扫描生效。
 - `get_skill_registry()` — 获取（并缓存）skill 注册表。首次调用时扫描磁盘。
 - `reload_skills()` — 强制重新扫描磁盘（用于运行时新增 skill 后刷新）。
 - `listing_line()` — 注入 system prompt 的一行描述。对应 available-skills 列表。
 - `add()` — (无文档)
-- `get()` — (无文档)
 
-行数: 236
+行数: 265
 
 ---
 
@@ -660,7 +684,7 @@
 ---
 
 ### tools/cron_tools.py
-`Cron 系列工具 — 对应 Claude Code 的 CronCreate/CronDelete/CronList。`
+`Cron 系列工具 — 定时任务登记（Create/Delete/List）。`
 
 类:
 - `CronCreateInput` — (无文档)
@@ -670,9 +694,9 @@
 - `CronListInput` — (无文档)
 - `CronListTool` — (无文档)
 
-依赖: `mai_agent.tools.base`, `mai_agent.tools.registry`
+依赖: `mai_agent.services.cron_scheduler`, `mai_agent.tools.base`, `mai_agent.tools.registry`
 
-行数: 130
+行数: 138
 
 ---
 
@@ -710,7 +734,7 @@
 
 依赖: `mai_agent.config`, `mai_agent.services.feishu`, `mai_agent.tools.base`, `mai_agent.tools.registry`
 
-行数: 288
+行数: 362
 
 ---
 
@@ -726,7 +750,7 @@
 
 依赖: `mai_agent.sandbox.policy`, `mai_agent.tools.base`, `mai_agent.tools.registry`, `mai_agent.tools.snapshots`, `mai_agent.tools.utils`
 
-行数: 101
+行数: 172
 
 ---
 
@@ -812,11 +836,11 @@
 - `McpTool` — MCP 代理工具 — 列表 + 调用的统一入口（懒加载）。
 
 函数:
-- `load_mcp_config()` — 从 .mcp.json 加载 MCP 服务器配置。
+- `load_mcp_config()` — 加载 MCP 服务器配置：.mcp.json + Plugin 注册的 mcp_config.json。
 
-依赖: `mai_agent.services.mcp_client`, `mai_agent.tools.base`, `mai_agent.tools.registry`
+依赖: `mai_agent.plugins.loader`, `mai_agent.services.mcp_client`, `mai_agent.tools.base`, `mai_agent.tools.registry`
 
-行数: 181
+行数: 189
 
 ---
 

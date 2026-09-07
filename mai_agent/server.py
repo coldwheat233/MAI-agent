@@ -667,13 +667,17 @@ async def api_set_sandbox(data: dict):
 
 @app.delete("/api/sessions/{session_id}")
 async def api_session_delete(session_id: str):
-    """删除一个 session。"""
-    from mai_agent.session import delete_session
+    """删除一个 session（含 L1 日志/轨迹原文副本级联清理）。
+
+    记忆层策略：SESSION_MEMORY/知识卡片等聚合产物不随会话删除——
+    需 MemoryDelete（卡片粒度）或手动重置，见 mai-services SKILL。
+    """
+    from mai_agent.session import purge_session
     cwd = getattr(_config, "project_root", ".") or "."
-    ok = delete_session(session_id, cwd)
-    if not ok:
+    info = await purge_session(session_id, cwd)
+    if not info.get("deleted"):
         return JSONResponse({"error": "Session not found"}, 404)
-    return {"deleted": True, "session_id": session_id}
+    return info
 
 
 @app.get("/api/workspaces")

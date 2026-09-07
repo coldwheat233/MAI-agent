@@ -55,6 +55,14 @@ def delete_session(session_id: str, project_root: str = ".") -> bool:
     return db.delete_session(session_id, project_root)
 
 
+async def purge_session(session_id: str, project_root: str = ".") -> dict[str, Any]:
+    """删除会话 + 级联清理 L1 原文副本（.mai/logs|traces/<sid>.jsonl）。
+
+    薄壳：签名对齐 db.purge_session，供 server.py / 未来 CLI 复用。
+    """
+    return await db.purge_session(session_id, project_root)
+
+
 def search_sessions(keyword: str, base_root: str = ".") -> list[dict[str, Any]]:
     return db.search_sessions(keyword, base_root)
 
