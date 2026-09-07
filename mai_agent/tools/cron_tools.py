@@ -1,11 +1,12 @@
-"""Cron 系列工具 — 对应 Claude Code 的 CronCreate/CronDelete/CronList。
+"""Cron 系列工具 — 定时任务登记（Create/Delete/List）。
 
-定时/延迟触发任务的能力。
+执行侧由 services/cron_scheduler.py 的调度器驱动：engine 首次 submit 时自动
+拉起（每个工作区一个），到期用 agent_loop 执行任务 prompt，并把
+next_fire/last_run/last_result 写回 .mai/cron.json。
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Any
 
 from pydantic import Field
 
+from mai_agent.services.cron_scheduler import parse_cron
 from mai_agent.tools.base import Tool, ToolInput, RunContext
 from mai_agent.tools.registry import registry
 
@@ -54,10 +56,11 @@ class CronCreateTool(Tool):
 
     async def call(self, input: CronCreateInput, context: RunContext) -> str:
         jobs = _load(context.cwd)
-        # Validate cron
-        fields = input.cron.strip().split()
-        if len(fields) != 5:
-            return f"[ERROR] Invalid cron expression: {input.cron}. Expected 5 fields."
+        # Validate cron（完整 5 字段解析——范围/步进/列表都校验）
+        if parse_cron(input.cron) is None:
+            return (f"[ERROR] Invalid cron expression: {input.cron}. "
+                    f"Expected 5 fields: minute hour dom month dow "
+                    f"(支持 * */n a-b a,b).")
         jid = f"cron_{len(jobs) + 1:03d}"
         job = {
             "id": jid,
@@ -66,6 +69,7 @@ class CronCreateTool(Tool):
             "recurring": input.recurring,
             "durable": input.durable,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "next_fire": None,  # 调度器首轮 tick 补齐并落盘
         }
         jobs.append(job)
         _save(context.cwd, jobs)
@@ -123,7 +127,11 @@ class CronListTool(Tool):
         for j in jobs:
             rec = "↻" if j.get("recurring") else "→"
             dur = "💾" if j.get("durable") else ""
-            lines.append(f"  {rec} #{j['id']} {j['cron']} {dur} {j['prompt'][:60]}")
+            nf = j.get("next_fire")
+            nf_s = f" 下次: {nf[:16]}" if nf else ""
+            lr = j.get("last_result")
+            lr_s = f" 上次: {(lr or '')[:40]}" if lr else ""
+            lines.append(f"  {rec} #{j['id']} {j['cron']} {dur}{nf_s}{lr_s} {j['prompt'][:60]}")
         return "\n".join(lines)
 
 

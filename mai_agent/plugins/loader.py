@@ -115,7 +115,7 @@ def load_plugins(project_root: str = ".") -> PluginRegistry:
         elif manifest.type == "mcp":
             _register_mcp_plugin(manifest, project_root)
         elif manifest.type == "skill" and manifest.entry:
-            _register_skill_plugin(manifest)
+            _register_skill_plugin(manifest, project_root)
 
     logger.info("已加载 %d 个 plugin: %s", len(registry),
                [p.name for p in registry.all()])
@@ -144,29 +144,57 @@ def _load_tool_plugin(manifest: PluginManifest, registry: PluginRegistry) -> Non
         logger.warning("Plugin '%s' 加载失败: %s", manifest.name, exc)
 
 
+# ── Plugin 提供的 MCP 服务器（供 mcp_tools 合并启动）────────
+
+_plugin_mcp_servers: dict[str, Any] = {}
+
+
+def get_plugin_mcp_servers() -> dict[str, Any]:
+    """返回 plugin 通过 mcp_config.json 注册的 mcpServers（浅拷贝）。"""
+    return dict(_plugin_mcp_servers)
+
+
 def _register_mcp_plugin(manifest: PluginManifest, project_root: str) -> None:
-    """将 MCP 类型 plugin 的配置注册到 .mcp.json 风格的系统。"""
-    # MCP plugin 可以附带自己的 mcp_server 配置
+    """注册 MCP 类型 plugin：把其 mcp_config.json 的 mcpServers 并入启动集合。
+
+    之后 mcp_tools.load_mcp_config 会把它们与 .mcp.json 的服务器一起合并启动。
+    """
     config_path = Path(manifest.source_dir) / "mcp_config.json"
-    if config_path.exists():
-        try:
-            cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            logger.info("Plugin '%s' MCP 配置已发现: %s", manifest.name,
-                       list(cfg.get("mcpServers", {}).keys()))
-        except Exception as exc:
-            logger.warning("Plugin '%s' MCP 配置加载失败: %s", manifest.name, exc)
-
-
-def _register_skill_plugin(manifest: PluginManifest) -> None:
-    """将 skill 类型 plugin 的 Markdown 文件注册到 skill 系统。"""
-    entry_path = Path(manifest.source_dir) / manifest.entry
-    if not entry_path.exists():
-        logger.warning("Plugin '%s' skill 文件不存在: %s", manifest.name, entry_path)
+    if not config_path.exists():
+        logger.warning("Plugin '%s' (mcp) 缺 mcp_config.json", manifest.name)
         return
-    # Skill 系统在启动时扫描 .mai/skills/ 和 ~/.mai/skills/
-    # Plugin 的 skill 文件需要复制/链接到 .mai/skills/，或 skill loader 也扫描 plugin 目录
-    # 这里做简单处理：将 plugin 的 skill 目录加入扫描路径（由 skill loader 后续支持）
-    logger.info("Plugin '%s' skill 已注册: %s", manifest.name, manifest.entry)
+    try:
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        servers = cfg.get("mcpServers", {}) or {}
+        for name, server_cfg in servers.items():
+            if server_cfg.get("enabled", True) is False:
+                continue
+            _plugin_mcp_servers[name] = server_cfg
+            logger.info("Plugin '%s' MCP server 已注册: %s", manifest.name, name)
+    except Exception as exc:
+        logger.warning("Plugin '%s' MCP 配置加载失败: %s", manifest.name, exc)
+
+
+def _register_skill_plugin(manifest: PluginManifest, project_root: str) -> None:
+    """注册 skill 类型 plugin：把其 skill 目录接入 skill loader 扫描路径。
+
+    entry 指向相对 plugin 目录的 skill 位置——目录本身含 SKILL.md（单个 skill），
+    或目录内含多个 <name>/SKILL.md（集合）。注册后立即可被 system prompt
+    列出、被 Skill 工具按名激活。
+    """
+    if not manifest.entry:
+        logger.warning("Plugin '%s' (skill) 缺 entry", manifest.name)
+        return
+    d = Path(manifest.source_dir) / manifest.entry
+    if not d.is_dir():
+        logger.warning("Plugin '%s' skill 目录不存在: %s", manifest.name, d)
+        return
+    try:
+        from mai_agent.skills.loader import register_extra_skill_dir
+        register_extra_skill_dir(project_root, str(d))
+        logger.info("Plugin '%s' skill 已注册: %s", manifest.name, d)
+    except Exception as exc:
+        logger.warning("Plugin '%s' skill 注册失败: %s", manifest.name, exc)
 
 
 # ── 全局缓存 ─────────────────────────────────────────────

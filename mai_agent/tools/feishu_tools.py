@@ -1,9 +1,12 @@
 """Feishu/Lark knowledge base tools.
 
-FeishuSearch — search wiki/docs
-FeishuRead   — read a document by token/url
-FeishuWrite  — create or append to a document
-FeishuList   — list recent documents
+FeishuListSpaces    — 按知识库名浏览（列出可访问的知识库空间）
+FeishuListSpaceDocs — 知识库目录树（列出空间下全部文档，带层级）
+FeishuSearch        — 检索（title 标题 / fulltext 全文两种模式）
+FeishuRead          — 读单篇文档（by token/url）
+FeishuReadSpace     — 读整个知识库空间（批量读取正文）
+FeishuWrite         — 创建 / 追加文档
+FeishuList          — 最近访问文档
 """
 
 from __future__ import annotations
@@ -41,11 +44,17 @@ def _check_config() -> Optional[str]:
 
 class FeishuSearchInput(ToolInput):
     query: str = Field(description="Search keywords for knowledge base")
+    mode: str = Field(default="title",
+                      description="'title' = match doc titles only (fast); 'fulltext' = search inside doc body (slow)")
+    space_id: Optional[str] = Field(default=None, description="Optional: limit search to one knowledge base space id")
+    max_scan_docs: int = Field(default=300, description="Fulltext mode: max docs to scan (avoid quota burn)")
+    page_size: int = Field(default=10, description="Max number of results")
 
 
 class FeishuSearchTool(Tool):
     name = "FeishuSearch"
-    description = "Search your Feishu knowledge base (wiki, docs). Returns titles, URLs, and doc tokens."
+    description = ("Search your Feishu knowledge base (wiki, docs). mode='title' matches doc titles; "
+                   "mode='fulltext' also searches inside document body and returns matching snippets.")
     input_schema = FeishuSearchInput
     is_concurrency_safe = True
 
@@ -56,19 +65,32 @@ class FeishuSearchTool(Tool):
 
         try:
             client = _get_client()
-            results = await client.search_kb(input.query)
+            results, meta = await client.search_kb(
+                input.query,
+                page_size=input.page_size,
+                mode=input.mode,
+                space_id=input.space_id or "",
+                max_scan_docs=input.max_scan_docs,
+            )
             if not results:
-                return f"No results for '{input.query}'."
-            lines = [f"Search: '{input.query}'"]
+                return f"No results for '{input.query}' (mode={input.mode})."
+            lines = [f"Search: '{input.query}' (mode={input.mode}, scanned_docs={meta.get('scanned_docs', 0)})"]
             for i, r in enumerate(results, 1):
                 t = r.get("title", "untitled")
                 u = r.get("url", "")
                 dt = r.get("doc_token", "")
-                lines.append(f"  {i}. {t}")
+                hit = r.get("hit", "title")
+                path = r.get("path", "")
+                lines.append(f"  {i}. [{hit}] {t}")
+                if path and path != t:
+                    lines.append(f"     path: {path}")
                 if u:
                     lines.append(f"     url: {u}")
                 if dt:
                     lines.append(f"     doc_token: {dt}")
+                snippet = r.get("snippet", "")
+                if hit == "content" and snippet:
+                    lines.append(f"     snippet: ...{snippet}...")
             return "\n".join(lines)
         except Exception as exc:
             return f"[ERROR] FeishuSearch failed: {exc}"
@@ -246,8 +268,8 @@ class FeishuListSpaceDocsInput(ToolInput):
 
 class FeishuListSpaceDocsTool(Tool):
     name = "FeishuListSpaceDocs"
-    description = ("List all documents inside a Feishu knowledge base space (知识库内文档列表). "
-                   "Returns titles + doc tokens — use doc token with FeishuRead to read content.")
+    description = ("List all documents inside a Feishu knowledge base space as a directory tree (知识库目录树). "
+                   "Returns titles with hierarchy + doc tokens — use doc token with FeishuRead to read content.")
     input_schema = FeishuListSpaceDocsInput
     is_concurrency_safe = True
 
@@ -261,22 +283,74 @@ class FeishuListSpaceDocsTool(Tool):
             docs = await client.list_space_docs(input.space_id, page_size=input.page_size)
             if not docs:
                 return "No documents in this knowledge base space."
-            lines = [f"Documents in space {input.space_id} ({len(docs)}):"]
-            for i, d in enumerate(docs, 1):
+            lines = [f"Directory tree of space {input.space_id} ({len(docs)} nodes):"]
+            for d in docs:
                 title = d.get("title", "untitled")
                 obj_type = d.get("obj_type", "")
                 token = d.get("obj_token", "")
                 depth = d.get("depth", 0)
+                marker = "■ " if depth == 0 else "├ "
                 indent = "  " * depth
-                lines.append(f"  {indent}{i}. [{obj_type}] {title}")
+                branch = f"{'  ' * depth}{marker}"
+                lines.append(f"  {branch}{title} [{obj_type}]")
                 if token:
-                    lines.append(f"     {indent}doc_token: {token}")
+                    lines.append(f"     {'  ' * depth}doc_token: {token}")
             return "\n".join(lines)
         except Exception as exc:
             return f"[ERROR] FeishuListSpaceDocs failed: {exc}"
 
 
 registry.register(FeishuListSpaceDocsTool())
+
+
+# ── FeishuReadSpace ─────────────────────────────────────
+# 读知识库空间：一次性读取空间下所有文档正文（截断版）
+
+
+class FeishuReadSpaceInput(ToolInput):
+    space_id: str = Field(description="Knowledge base space id (from FeishuListSpaces)")
+    max_docs: int = Field(default=15, description="Max number of docs to read (tree order)")
+    per_doc_chars: int = Field(default=800, description="Chars kept per doc to limit output size")
+
+
+class FeishuReadSpaceTool(Tool):
+    name = "FeishuReadSpace"
+    description = ("Read content of an entire Feishu knowledge base space (读知识库空间): returns body of every "
+                   "docx in tree order, truncated per doc. Use FeishuRead for full single-doc content.")
+    input_schema = FeishuReadSpaceInput
+    is_concurrency_safe = False
+
+    async def call(self, input: FeishuReadSpaceInput, context: RunContext) -> str:
+        err = _check_config()
+        if err:
+            return f"[ERROR] {err}"
+
+        try:
+            client = _get_client()
+            docs = await client.read_space(
+                input.space_id,
+                max_docs=input.max_docs,
+                per_doc_chars=input.per_doc_chars,
+            )
+            if not docs:
+                return "No readable docx documents in this space."
+            lines = [f"Space content {input.space_id} ({len(docs)} docs, tree order):"]
+            for d in docs:
+                title = d.get("title", "untitled")
+                depth = d.get("depth", 0)
+                content = d.get("content", "").strip()
+                lines.append(f"\n{'  ' * depth}■ {title}")
+                lines.append(f"  doc_token: {d.get('obj_token', '')}")
+                if content:
+                    lines.append(f"  content: {content[: input.per_doc_chars]}")
+                else:
+                    lines.append("  (empty or unreadable)")
+            return "\n".join(lines)
+        except Exception as exc:
+            return f"[ERROR] FeishuReadSpace failed: {exc}"
+
+
+registry.register(FeishuReadSpaceTool())
 
 
 # ── Helpers ──────────────────────────────────────────────

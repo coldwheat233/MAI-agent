@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -113,8 +114,8 @@ class AgentEngine:
 
         # Structured logger (JSON-lines, async writer)
         self._slog = None
-        # 四脑协调器状态
-        self._coordinator_ctx = None  # CoordinatorContext | None
+        # Cron 调度器是否由本 engine 启动（stop 时负责停）
+        self._cron_started = False
 
     def _init_session_state(self) -> dict[str, Any]:
         """初始化会话级共享状态（含沙箱策略、项目根）。"""
@@ -148,6 +149,7 @@ class AgentEngine:
         self._turn_count = 0
         self._start_time = time.monotonic()
         self._tools_called = []
+        self._cron_started = False
 
         # Start structured logger
         from mai_agent.services.structured_logger import get_logger
@@ -220,6 +222,14 @@ class AgentEngine:
         """
         self._turn_count += 1
         context = self._run_context
+
+        # Cron 调度器懒启动（每个工作区至多一个；首次 submit 时才拉起）
+        if not self._cron_started:
+            try:
+                from mai_agent.services.cron_scheduler import ensure_cron_scheduler
+                self._cron_started = ensure_cron_scheduler(self)
+            except Exception as exc:
+                logger.warning("Cron 调度器启动失败: %s", exc)
 
         # ── 预先 commit user 消息 ─────────────────────────────
         # 必须在 agent_loop 之前把 UserMessage 落到 self._messages：
@@ -301,6 +311,12 @@ class AgentEngine:
         task2 = asyncio.create_task(self._detect_concepts(user_input))
         self._bg_tasks.add(task2)
         task2.add_done_callback(self._bg_tasks.discard)
+
+        # 段树 LLM 摘要（可选增强，默认模板摘要；设 MAI_SEGTREE_LLM_SUMMARY=1 开启）
+        if os.environ.get("MAI_SEGTREE_LLM_SUMMARY") == "1":
+            task3 = asyncio.create_task(self._summarize_segtree())
+            self._bg_tasks.add(task3)
+            task3.add_done_callback(self._bg_tasks.discard)
 
         logger.info(
             "会话 %s 第 %d 轮完成 — messages: %d",
@@ -405,10 +421,37 @@ class AgentEngine:
         except Exception as exc:
             logger.debug("概念检测失败: %s", exc)
 
+    async def _summarize_segtree(self) -> None:
+        """后台：把脏节点用 LLM 合并摘要并落盘（MAI_SEGTREE_LLM_SUMMARY=1 才跑）。
+
+        默认关闭：模板摘要（确定性、零 LLM 成本）已能满足 prompt 注入概览；
+        数据量大、想获得高质量根摘要时显式开启。接线已闭环——开启后脏节点
+        处理完会落盘 segments.json，跨进程保留。
+        """
+        try:
+            from mai_agent.services.memory_tags import get_tree
+            tree = get_tree(self.config.cwd)
+            if tree is None:
+                return
+            n = await tree.summarize_dirty_background(self._llm, max_nodes=5)
+            if n:
+                tree.save()
+                logger.info("段树 LLM 摘要完成: %d 个节点", n)
+        except Exception as exc:
+            logger.debug("段树 LLM 摘要失败: %s", exc)
+
     async def stop(self) -> None:
         """Gracefully stop the engine — flush logs, cancel background tasks."""
         for t in list(self._bg_tasks):
             t.cancel()
+        # 停 Cron 调度器（若由本 engine 启动）
+        if self._cron_started:
+            try:
+                from mai_agent.services.cron_scheduler import stop_cron_scheduler
+                stop_cron_scheduler(self.config.cwd)
+            except Exception:
+                pass
+            self._cron_started = False
         # 停止 MCP 服务器
         try:
             from mai_agent.tools.mcp_tools import stop_all_mcp
@@ -457,7 +500,10 @@ class AgentEngine:
         logger.info("会话 %s 热切换模型: %s / %s", self._session_id, provider_name, model)
 
     def set_brain(self, brain_type: str) -> None:
-        """激活或关闭脑模式。
+        """激活或关闭脑模式（只做角色 prompt 注入开关）。
+
+        四脑协调器已下线（改为 Agent 工具按需孵化子 Agent），此处不再维护
+        CoordinatorContext，只切换 active_brain 供 agent_loop 注入脑专用 prompt。
 
         Args:
             brain_type: 脑名（dev_explorer/dev_validator/...）或 "" 关闭。
@@ -467,20 +513,7 @@ class AgentEngine:
             raise ValueError(f"未知 brain: {brain_type}。有效: {', '.join(v for v in valid if v)}")
         self._run_context.active_brain = brain_type
         self.config.brain_type = brain_type
-        # 初始化/清除协调器状态
-        if brain_type:
-            from mai_agent.brains.coordinator import CoordinatorContext, BrainState
-            self._coordinator_ctx = CoordinatorContext(state=BrainState.IDLE)
-        else:
-            self._coordinator_ctx = None
         logger.info("会话 %s 脑切换为: %s", self._session_id, brain_type or "off")
-
-    @property
-    def coordinator_status(self) -> str:
-        """获取当前协调器状态栏文本（用于注入 system prompt 或前端展示）。"""
-        if self._coordinator_ctx:
-            return self._coordinator_ctx.status_bar()
-        return ""
 
     def snapshot_messages(self) -> list[Message]:
         """存盘用的快照：self._messages +（若存在）流式占位 _streaming。

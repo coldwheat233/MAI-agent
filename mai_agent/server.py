@@ -801,16 +801,6 @@ async def api_browse(path: str = ""):
         return JSONResponse({"error": "Permission denied"}, 403)
 
 
-@app.get("/api/coordinator")
-async def api_coordinator():
-    """获取四脑协调器当前状态。"""
-    engine = await _get_engine()
-    return {
-        "brain": engine._run_context.active_brain,
-        "status": engine.coordinator_status,
-    }
-
-
 @app.get("/api/feishu/status")
 async def api_feishu_status():
     """检查飞书配置状态。"""
@@ -1117,7 +1107,8 @@ async def api_set_model(data: dict):
 
 @app.post("/api/restart")
 async def api_restart():
-    key = _norm(_config.project_root or ".")
+    cfg = _ensure_config()  # 冷启动（未建 WS 连接）时先初始化配置，避免 None 崩溃
+    key = _norm(cfg.project_root or ".")
     await _cancel_submit_for(key, timeout=3.0)
     old = _engines.pop(key, None)
     if old:
@@ -1126,7 +1117,7 @@ async def api_restart():
             from mai_agent.session import save_session
             save_session(old.session_id, old._messages, old.config.cwd)
         await old.stop()
-    engine = await _init_engine_async(_config.project_root or "")
+    engine = await _init_engine_async(cfg.project_root or "")
     # 立即落盘空会话——侧边栏刷新时能看到
     from mai_agent.session import save_session
     save_session(engine.session_id, [], engine.config.cwd)

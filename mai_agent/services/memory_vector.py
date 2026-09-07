@@ -60,13 +60,17 @@ def _get_store(project_root: str) -> Optional[KnowledgeStore]:
         return None
 
 
-def index_card(memory: TaggedMemory, project_root: str = ".") -> bool:
-    """索引一张卡片到向量库（doc_id = 卡片名）。"""
+async def index_card(memory: TaggedMemory, project_root: str = ".") -> bool:
+    """索引一张卡片到向量库（doc_id = 卡片名）。
+
+    async 化（不再 asyncio.run）——MemoryWriteTool 等调用方运行在 agent_loop 的
+    事件循环线程里，asyncio.run 在已有 running loop 的线程会直接 RuntimeError，
+    导致卡片索引在活体使用中静默失效（只在同步测试/脚本里通）。
+    """
     store = _get_store(project_root)
     if store is None:
         return False
     try:
-        import asyncio
         text = "\n".join([
             memory.name,
             memory.description,
@@ -75,29 +79,27 @@ def index_card(memory: TaggedMemory, project_root: str = ".") -> bool:
         ]).strip()
         if not text:
             return False
-        # 同步到事件循环（调用方可能是同步上下文）
-        asyncio.run(store.add(memory.name, text, metadata={"type": "card"}))
+        await store.add(memory.name, text, metadata={"type": "card"})
         return True
     except Exception as exc:
         logger.debug("卡片索引失败 %s: %s", memory.name, exc)
         return False
 
 
-def remove_card(name: str, project_root: str = ".") -> bool:
+async def remove_card(name: str, project_root: str = ".") -> bool:
     """从向量库删除卡片索引。"""
     store = _get_store(project_root)
     if store is None:
         return False
     try:
-        import asyncio
-        asyncio.run(store.delete(name))
+        await store.delete(name)
         return True
     except Exception as exc:
         logger.debug("卡片索引删除失败 %s: %s", name, exc)
         return False
 
 
-def semantic_search(query: str, project_root: str = ".", top_k: int = 8) -> list[TaggedMemory]:
+async def semantic_search(query: str, project_root: str = ".", top_k: int = 8) -> list[TaggedMemory]:
     """向量语义召回卡片（与关键词互补——搜"和缓存类似的东西"能命中）。
 
     返回按相似度排序的卡片列表。
@@ -106,8 +108,7 @@ def semantic_search(query: str, project_root: str = ".", top_k: int = 8) -> list
     if store is None:
         return []
     try:
-        import asyncio
-        results = asyncio.run(store.search(query, top_k=top_k, alpha=0.7))
+        results = await store.search(query, top_k=top_k, alpha=0.7)
         cards = []
         for r in results:
             mem = load_memory_by_name(r["id"], project_root)
@@ -120,10 +121,10 @@ def semantic_search(query: str, project_root: str = ".", top_k: int = 8) -> list
         return []
 
 
-def reindex_all(project_root: str = ".") -> int:
+async def reindex_all(project_root: str = ".") -> int:
     """全量重建卡片向量索引（新增/批量导入时调用）。"""
     count = 0
     for mem in load_all_memories(project_root):
-        if index_card(mem, project_root):
+        if await index_card(mem, project_root):
             count += 1
     return count

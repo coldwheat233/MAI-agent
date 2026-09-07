@@ -140,23 +140,33 @@ def get_tree(project_root: str = ".", refresh: bool = False) -> Any:
 
 def _maybe_insert_tree(name: str, description: str, tags: list[str],
                        created_at: str, project_root: str = ".") -> None:
-    """如果该工作区的 segtree 可用，插入卡片。"""
+    """把卡片同步进 segtree 并落盘 segments.json。
+
+    兼容两种时序：
+      - 树先建（engine.start 的 init_tree）后写卡 → 直接 insert；
+      - 卡先存在、树后初始化（懒 get_tree 从现有卡片建树）/ MemoryWrite 更新
+        既有卡 → 同名已入树 → 先 remove 再 insert（重建该位置聚合+摘要）。
+    """
     tree = get_tree(project_root)
     if tree is None:
         return
     try:
+        if name in tree.cards or name in tree._card_index:
+            tree.remove(name)  # 更新/懒建树重放场景：去重后重插
         tree.insert(name, _parse_date(created_at), description, tags)
+        tree.save()  # 落盘——段树状态（摘要/主题聚合）跨进程保持，避免每次启动全量重建
     except Exception as exc:
         logger.debug("segtree insert 失败: %s", exc)
 
 
 def _maybe_remove_tree(name: str, project_root: str = ".") -> None:
-    """如果该工作区的 segtree 可用，删除卡片。"""
+    """如果该工作区的 segtree 可用，删除卡片并落盘 segments.json。"""
     tree = get_tree(project_root)
     if tree is None:
         return
     try:
         tree.remove(name)
+        tree.save()
     except Exception as exc:
         logger.debug("segtree remove 失败: %s", exc)
 
@@ -246,8 +256,8 @@ def load_all_memories(project_root: str = ".") -> list[TaggedMemory]:
     return [m for m in (_load_file(p) for p in sorted(d.glob("*.md")) if p.name != INDEX_FILE) if m]
 
 
-def save_memory(memory: TaggedMemory, project_root: str = ".") -> str:
-    """保存一条记忆卡片，返回其路径。同时刷新索引。"""
+async def save_memory(memory: TaggedMemory, project_root: str = ".") -> str:
+    """保存一条记忆卡片，返回其路径。同步刷新索引 + 段树 + 向量索引。"""
     _ensure_dir(project_root)
     if memory.type not in VALID_TYPES:
         memory.type = "reference"
@@ -264,14 +274,14 @@ def save_memory(memory: TaggedMemory, project_root: str = ".") -> str:
     # 同步向量索引（语义检索）——失败不阻断主流程
     try:
         from mai_agent.services.memory_vector import index_card
-        index_card(memory, project_root)
+        await index_card(memory, project_root)
     except Exception:
         pass
     logger.info("记忆已保存: %s (tags=%s)", memory.name, memory.tags)
     return str(path)
 
 
-def delete_memory(name: str, project_root: str = ".") -> bool:
+async def delete_memory(name: str, project_root: str = ".") -> bool:
     """删除一条记忆卡片。"""
     path = memory_dir(project_root) / f"{name}.md"
     if not path.exists():
@@ -282,7 +292,7 @@ def delete_memory(name: str, project_root: str = ".") -> bool:
     # 同步删除向量索引
     try:
         from mai_agent.services.memory_vector import remove_card
-        remove_card(name, project_root)
+        await remove_card(name, project_root)
     except Exception:
         pass
     return True
@@ -379,7 +389,7 @@ def search_by_daterange(start: Optional[str], end: Optional[str],
     return result
 
 
-def search(query: str, project_root: str = ".") -> list[TaggedMemory]:
+async def search(query: str, project_root: str = ".") -> list[TaggedMemory]:
     """混合检索：关键词（segtree/扫描）+ 向量语义召回（memory_vector）。
 
     关键词优先（精确匹配），向量补召回（语义相近但无关键词命中）。
@@ -400,11 +410,11 @@ def search(query: str, project_root: str = ".") -> list[TaggedMemory]:
             if q in haystack:
                 keyword_hits.append(m)
 
-    # 2. 向量语义召回（新增）——补关键词没命中的
+    # 2. 向量语义召回——补关键词没命中的
     semantic_hits: list[TaggedMemory] = []
     try:
         from mai_agent.services.memory_vector import semantic_search
-        semantic_hits = semantic_search(query, project_root)
+        semantic_hits = await semantic_search(query, project_root)
     except Exception:
         pass  # 向量不可用则纯关键词
 

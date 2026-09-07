@@ -29,8 +29,8 @@ knowledge = [
 ]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-q"
 
 [build-system]
 requires = ["setuptools>=75"]

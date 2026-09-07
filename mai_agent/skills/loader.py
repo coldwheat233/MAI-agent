@@ -207,6 +207,19 @@ def load_skills(project_root: str = ".") -> SkillRegistry:
     if proj_dir.is_dir():
         _scan_skill_dir(proj_dir, registry, source="project")
 
+    # Plugin 注册的额外 skill 目录（.mai/plugins/*/...，engine.start 时注册）
+    for extra in _extra_skill_dirs.get(str(Path(project_root).resolve()), []):
+        ed = Path(extra)
+        if not ed.is_dir():
+            continue
+        if (ed / "SKILL.md").is_file():
+            # 目录本身就是一个 Claude 格式 skill
+            skill = _load_skill_file(ed / "SKILL.md", "project", fallback_name=ed.name)
+            if skill:
+                registry.add(skill)
+        else:
+            _scan_skill_dir(ed, registry, source="project")
+
     if registry:
         logger.info("已加载 %d 个 skill: %s",
                     len(registry), [s.name for s in registry.all()])
@@ -217,6 +230,22 @@ def load_skills(project_root: str = ".") -> SkillRegistry:
 
 _cached_registry: Optional[SkillRegistry] = None
 _cached_root: str = ""
+
+# Plugin 注册的额外 skill 目录：project_root(resolved) → [绝对目录]
+_extra_skill_dirs: dict[str, list[str]] = {}
+
+
+def register_extra_skill_dir(project_root: str, skill_dir: str) -> None:
+    """Plugin 把自有 skill 目录注册进扫描路径，并清缓存使下次扫描生效。"""
+    global _cached_registry, _cached_root
+    key = str(Path(project_root).resolve())
+    lst = _extra_skill_dirs.setdefault(key, [])
+    d = str(Path(skill_dir).resolve())
+    if d not in lst:
+        lst.append(d)
+    _cached_registry = None
+    _cached_root = ""
+    logger.info("注册额外 skill 目录: %s → %s", key, d)
 
 
 def get_skill_registry(project_root: str = ".") -> SkillRegistry:

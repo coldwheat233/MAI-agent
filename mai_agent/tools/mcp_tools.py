@@ -156,26 +156,34 @@ async def stop_all_mcp() -> None:
 
 
 def load_mcp_config(project_root: str = ".") -> list[MCPServerConfig]:
-    """从 .mcp.json 加载 MCP 服务器配置。"""
+    """加载 MCP 服务器配置：.mcp.json + Plugin 注册的 mcp_config.json。"""
     from pathlib import Path as _Path
 
+    servers: dict[str, Any] = {}
+    # 1. .mcp.json
     config_path = _Path(project_root) / ".mcp.json"
-    if not config_path.exists():
-        return []
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            servers.update(data.get("mcpServers", {}) or {})
+        except Exception as exc:
+            logger.warning(".mcp.json 加载失败: %s", exc)
 
+    # 2. Plugin 通过 mcp_config.json 注册的服务器（engine.start 先 load_plugins）
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-        servers = data.get("mcpServers", {})
-        configs = []
-        for name, cfg in servers.items():
-            configs.append(MCPServerConfig(
-                name=name,
-                command=cfg.get("command", ""),
-                args=cfg.get("args", []),
-                env=cfg.get("env", {}),
-                enabled=cfg.get("enabled", True),
-            ))
-        return configs
-    except Exception as exc:
-        logger.warning(".mcp.json 加载失败: %s", exc)
-        return []
+        from mai_agent.plugins.loader import get_plugin_mcp_servers
+        for name, cfg in get_plugin_mcp_servers().items():
+            servers.setdefault(name, cfg)  # .mcp.json 同名优先
+    except Exception:
+        pass
+
+    configs = []
+    for name, cfg in servers.items():
+        configs.append(MCPServerConfig(
+            name=name,
+            command=cfg.get("command", ""),
+            args=cfg.get("args", []),
+            env=cfg.get("env", {}),
+            enabled=cfg.get("enabled", True),
+        ))
+    return configs

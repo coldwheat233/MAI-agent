@@ -58,7 +58,7 @@ class MemoryWriteTool(Tool):
             content=input.content,
             created_at=(existing.created_at if existing else ""),
         )
-        path = memory_tags.save_memory(mem, root)
+        path = await memory_tags.save_memory(mem, root)
         action = "更新" if existing else "创建"
         return (
             f"已{action}记忆卡片: {input.name}\n"
@@ -100,7 +100,7 @@ class MemorySearchTool(Tool):
         elif input.type:
             results = memory_tags.search_by_type(input.type, root)
         elif input.query:
-            results = memory_tags.search(input.query, root)
+            results = await memory_tags.search(input.query, root)
         else:
             results = memory_tags.load_all_memories(root)
 
@@ -213,7 +213,7 @@ class MemoryDeleteTool(Tool):
 
     async def call(self, input: MemoryDeleteInput, context: RunContext) -> str:
         root = _root(context)
-        if memory_tags.delete_memory(input.name, root):
+        if await memory_tags.delete_memory(input.name, root):
             return f"已删除记忆卡片: {input.name}"
         return f"[ERROR] 记忆不存在: {input.name}"
 

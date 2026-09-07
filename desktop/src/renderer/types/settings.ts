@@ -20,11 +20,6 @@ export interface FeishuStatus {
   hint: string
 }
 
-export interface CoordinatorState {
-  brain: string
-  status: string
-}
-
 // ── LLM Provider（对齐 DSH listProviders）──────────────
 
 export interface ProviderInfo {

@@ -11,7 +11,6 @@ import type {
   WorkspaceEntry,
   BrowseResult,
   FeishuStatus,
-  CoordinatorState,
   ProvidersResponse,
   ProviderInfo,
 } from '@/types'
@@ -92,9 +91,6 @@ export const api = {
       .then(r => r.json()),
   addProviderModel: (name: string, model: string) =>
     post<{ provider: string; models: string[] }>(`/api/providers/${encodeURIComponent(name)}/models`, { model }),
-
-  // Coordinator
-  fetchCoordinator: () => get<CoordinatorState>('/api/coordinator'),
 
   // Feishu
   fetchFeishuStatus: () => get<FeishuStatus>('/api/feishu/status'),

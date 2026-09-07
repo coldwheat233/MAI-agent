@@ -109,60 +109,114 @@ class FeishuClient:
         await _walk()
         return results[:page_size]
 
-    async def search_kb(self, query: str, page_size: int = 10) -> list[dict]:
+    async def search_kb(self, query: str, page_size: int = 10, mode: str = "title",
+                        space_id: str = "", max_scan_docs: int = 300) -> list[dict]:
         """Search Feishu knowledge base by traversing node tree.
 
-        Feishu 没有 wiki 级别的全文搜索 API（/wiki/v2/search 不存在）。
-        通过遍历空间节点树，按标题做子串匹配来实现搜索。
+        飞书没有 wiki 级别的全文搜索 API（/wiki/v2/search 不存在），因此：
+        - mode="title"    只匹配节点标题（快，遍历节点树即可）
+        - mode="fulltext" 全文检索：遍历空间节点树后逐篇读取 docx 正文做子串匹配
+                          （慢，受 max_scan_docs 限制，配额消耗大）
+        space_id 可限定在单个知识库内搜索；空则搜索全部可访问空间。
         """
         results: list[dict] = []
         query_lower = query.lower()
+        scanned = 0
 
-        # 1. 列出所有可访问的知识库空间
-        spaces = await self._request("GET", "/wiki/v2/spaces", params={"page_size": 50})
-        space_items = spaces.get("items", [])
+        # 1. 确定要搜索的空间列表
+        if space_id:
+            space_items = [{"space_id": space_id}]
+        else:
+            spaces = await self._request("GET", "/wiki/v2/spaces", params={"page_size": 50})
+            space_items = spaces.get("items", [])
 
-        # 2. 递归遍历每个空间的节点树
-        async def _walk_nodes(space_id: str, parent_token: str = "", depth: int = 0):
-            if len(results) >= page_size:
+        # 2. 递归遍历节点树；fulltext 模式下读取 docx 正文做内容匹配
+        async def _walk_nodes(sid: str, parent_token: str = "", depth: int = 0, path: str = ""):
+            nonlocal scanned
+            if len(results) >= page_size or scanned >= max_scan_docs:
                 return
             try:
                 nodes = await self._request(
-                    "GET", f"/wiki/v2/spaces/{space_id}/nodes",
+                    "GET", f"/wiki/v2/spaces/{sid}/nodes",
                     params={"page_size": 50, "parent_node_token": parent_token},
                 )
             except Exception:
                 return
             for n in nodes.get("items", []):
-                if len(results) >= page_size:
+                if len(results) >= page_size or scanned >= max_scan_docs:
                     return
                 title = n.get("title", "")
                 obj_token = n.get("obj_token", "")
                 obj_type = n.get("obj_type", "")
                 node_token = n.get("node_token", "")
                 has_child = n.get("has_child", False)
+                cur_path = f"{path}/{title}" if path else title
 
-                # 标题子串匹配（不区分大小写）
-                if query_lower in title.lower():
-                    results.append({
-                        "title": title,
-                        "doc_token": obj_token,
-                        "obj_type": obj_type,
-                        "url": f"https://bytedance.feishu.cn/{obj_type}/{obj_token}",
-                        "space_id": space_id,
-                        "node_token": node_token,
-                    })
+                title_hit = query_lower in title.lower()
+                hit: dict = {
+                    "title": title,
+                    "doc_token": obj_token,
+                    "obj_type": obj_type,
+                    "url": f"https://bytedance.feishu.cn/{obj_type}/{obj_token}",
+                    "space_id": sid,
+                    "node_token": node_token,
+                    "path": cur_path,
+                }
+
+                if title_hit:
+                    hit["hit"] = "title"
+                    hit["snippet"] = title
+                    results.append(hit)
+                elif mode == "fulltext" and obj_type == "docx" and obj_token:
+                    # 正文全文检索：逐篇读取文档内容做子串匹配
+                    scanned += 1
+                    try:
+                        text = await self.read_doc(obj_token)
+                    except Exception:
+                        text = ""
+                    if text and query_lower in text.lower():
+                        idx = text.lower().find(query_lower)
+                        start = max(0, idx - 60)
+                        end = min(len(text), idx + len(query) + 160)
+                        hit["hit"] = "content"
+                        hit["snippet"] = text[start:end]
+                        results.append(hit)
 
                 # 递归子节点（限制深度避免超时）
                 if has_child and depth < 5:
-                    await _walk_nodes(space_id, node_token, depth + 1)
+                    await _walk_nodes(sid, node_token, depth + 1, cur_path)
 
         for space in space_items:
             await _walk_nodes(space.get("space_id", ""))
             if len(results) >= page_size:
                 break
 
-        return results[:page_size]
+        meta = {"scanned_docs": scanned}
+        return results[:page_size], meta
+
+    async def read_space(self, space_id: str, max_docs: int = 20,
+                         per_doc_chars: int = 2000) -> list[dict]:
+        """读取知识库空间内的全部文档正文（按目录树顺序）。
+
+        返回: [{title, path, obj_type, doc_token, content, depth}]
+        content 每篇截取 per_doc_chars 字符，避免输出过大；需要全文请用 FeishuRead 单篇读。
+        """
+        docs = await self.list_space_docs(space_id, page_size=max_docs)
+        out: list[dict] = []
+        for d in docs:
+            obj_token = d.get("obj_token", "")
+            obj_type = d.get("obj_type", "")
+            if obj_type != "docx" or not obj_token:
+                continue
+            try:
+                text = await self.read_doc(obj_token)
+            except Exception:
+                text = ""
+            out.append({
+                **d,
+                "content": text[:per_doc_chars],
+            })
+        return out
 
     async def read_doc(self, doc_token: str) -> str:
         """Read raw content of a Feishu document."""

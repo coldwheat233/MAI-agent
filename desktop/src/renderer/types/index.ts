@@ -11,7 +11,6 @@ export type {
   Permission,
   Language,
   FeishuStatus,
-  CoordinatorState,
   ProviderInfo,
   ProvidersResponse,
 } from './settings'
