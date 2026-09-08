@@ -243,6 +243,19 @@ class AgentEngine:
         # 流式占位：让 checkpoint / 断连 save 能拿到正在流出的 assistant 内容
         self._streaming = AssistantMessage(content="", tool_calls=[])
 
+        # ── Trace: 用户输入 span（Trace 面板据此区分"用户说了什么"）──
+        if getattr(self, "_trace", None) is not None:
+            try:
+                from mai_agent.services.trace import make_span
+                await self._trace.record(make_span(
+                    "user", self._session_id,
+                    label=f"用户: {user_input.splitlines()[0][:60]}",
+                    text=user_input,
+                    turn=self._turn_count,
+                ))
+            except Exception as exc:
+                logger.debug("Trace user span failed: %s", exc)
+
         # Rebuild system prompt fresh every submit (picks up latest cwd)
         # 含 git subprocess + 文件扫描，放线程池避免阻塞事件循环
         await asyncio.to_thread(self._refresh_system_prompt)

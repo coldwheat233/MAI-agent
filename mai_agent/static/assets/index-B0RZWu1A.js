@@ -7200,9 +7200,9 @@ async function get(path) {
   if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
   return res.json();
 }
-async function post(path, body) {
+async function post(path, body, method = "POST") {
   const res = await fetch(`${SERVER_URL}${path}`, {
-    method: "POST",
+    method,
     headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : void 0
   });
@@ -7237,11 +7237,16 @@ const api = {
   browseDirectory: (path) => get(`/api/browse?path=${encodeURIComponent(path)}`),
   // Settings
   setMode: (mode) => post("/api/mode", { mode }),
-  setModel: (model) => post("/api/model", { model }),
+  setModel: (model, provider) => post("/api/model", { model, provider }),
   setBrain: (brain) => post("/api/brain", { brain }),
   setSandbox: (mode) => post("/api/sandbox", { mode }),
-  // Coordinator
-  fetchCoordinator: () => get("/api/coordinator"),
+  // LLM Providers（对齐 DSH listProviders / discoverModels / provider 管理）
+  fetchProviders: () => get("/api/providers"),
+  discoverModels: (provider) => post("/api/models/discover", { provider }),
+  createProvider: (data) => post("/api/providers", data),
+  updateProvider: (name, data) => post(`/api/providers/${encodeURIComponent(name)}`, data, "PUT"),
+  deleteProvider: (name) => fetch(`${SERVER_URL}/api/providers/${encodeURIComponent(name)}`, { method: "DELETE" }).then((r2) => r2.json()),
+  addProviderModel: (name, model) => post(`/api/providers/${encodeURIComponent(name)}/models`, { model }),
   // Feishu
   fetchFeishuStatus: () => get("/api/feishu/status"),
   // Stats
@@ -7631,6 +7636,21 @@ const createLucideIcon = (iconName, iconNode) => {
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
+const Activity = createLucideIcon("Activity", [
+  [
+    "path",
+    {
+      d: "M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2",
+      key: "169zse"
+    }
+  ]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
 const ArrowLeft = createLucideIcon("ArrowLeft", [
   ["path", { d: "m12 19-7-7 7-7", key: "1l729n" }],
   ["path", { d: "M19 12H5", key: "x3x0zl" }]
@@ -7644,6 +7664,20 @@ const ArrowLeft = createLucideIcon("ArrowLeft", [
 const BookOpen = createLucideIcon("BookOpen", [
   ["path", { d: "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z", key: "vv98re" }],
   ["path", { d: "M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z", key: "1cyq3y" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const Bot = createLucideIcon("Bot", [
+  ["path", { d: "M12 8V4H8", key: "hb8ula" }],
+  ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2", key: "enze0r" }],
+  ["path", { d: "M2 14h2", key: "vft8re" }],
+  ["path", { d: "M20 14h2", key: "4cs60a" }],
+  ["path", { d: "M15 13v2", key: "1xurst" }],
+  ["path", { d: "M9 13v2", key: "rq6x2g" }]
 ]);
 /**
  * @license lucide-react v0.400.0 - ISC
@@ -7681,6 +7715,15 @@ const Brain = createLucideIcon("Brain", [
  * See the LICENSE file in the root directory of this source tree.
  */
 const Check = createLucideIcon("Check", [["path", { d: "M20 6 9 17l-5-5", key: "1gmf2c" }]]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const ChevronDown = createLucideIcon("ChevronDown", [
+  ["path", { d: "m6 9 6 6 6-6", key: "qrunsl" }]
+]);
 /**
  * @license lucide-react v0.400.0 - ISC
  *
@@ -7727,6 +7770,18 @@ const Clock = createLucideIcon("Clock", [
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
+const Coins = createLucideIcon("Coins", [
+  ["circle", { cx: "8", cy: "8", r: "6", key: "3yglwk" }],
+  ["path", { d: "M18.09 10.37A6 6 0 1 1 10.34 18", key: "t5s6rm" }],
+  ["path", { d: "M7 6h1v4", key: "1obek4" }],
+  ["path", { d: "m16.71 13.88.7.71-2.82 2.82", key: "1rbuyh" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
 const Copy = createLucideIcon("Copy", [
   ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2", key: "17jyea" }],
   ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2", key: "zix9uf" }]
@@ -7748,6 +7803,33 @@ const Cpu = createLucideIcon("Cpu", [
   ["path", { d: "M20 9h2", key: "19tzq7" }],
   ["path", { d: "M9 2v2", key: "165o2o" }],
   ["path", { d: "M9 20v2", key: "i2bqo8" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const Eye = createLucideIcon("Eye", [
+  ["path", { d: "M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z", key: "rwhkz3" }],
+  ["circle", { cx: "12", cy: "12", r: "3", key: "1v7zrd" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const FilePen = createLucideIcon("FilePen", [
+  ["path", { d: "M12.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v9.5", key: "1couwa" }],
+  ["path", { d: "M14 2v4a2 2 0 0 0 2 2h4", key: "tnqrlb" }],
+  [
+    "path",
+    {
+      d: "M13.378 15.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z",
+      key: "1y4qbx"
+    }
+  ]
 ]);
 /**
  * @license lucide-react v0.400.0 - ISC
@@ -7825,6 +7907,17 @@ const GitCommitHorizontal = createLucideIcon("GitCommitHorizontal", [
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
+const Globe = createLucideIcon("Globe", [
+  ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
+  ["path", { d: "M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20", key: "13o1zl" }],
+  ["path", { d: "M2 12h20", key: "9i4pu4" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
 const GraduationCap = createLucideIcon("GraduationCap", [
   [
     "path",
@@ -7846,6 +7939,23 @@ const Info = createLucideIcon("Info", [
   ["circle", { cx: "12", cy: "12", r: "10", key: "1mglay" }],
   ["path", { d: "M12 16v-4", key: "1dtifu" }],
   ["path", { d: "M12 8h.01", key: "e9boi3" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const Layers = createLucideIcon("Layers", [
+  [
+    "path",
+    {
+      d: "m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z",
+      key: "8b97xw"
+    }
+  ],
+  ["path", { d: "m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65", key: "dd6zsq" }],
+  ["path", { d: "m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65", key: "ep9fru" }]
 ]);
 /**
  * @license lucide-react v0.400.0 - ISC
@@ -7961,6 +8071,15 @@ const Pencil = createLucideIcon("Pencil", [
     }
   ],
   ["path", { d: "m15 5 4 4", key: "1mk7zo" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const Play = createLucideIcon("Play", [
+  ["polygon", { points: "6 3 20 12 6 21 6 3", key: "1oa8hb" }]
 ]);
 /**
  * @license lucide-react v0.400.0 - ISC
@@ -8124,12 +8243,49 @@ const Tag = createLucideIcon("Tag", [
  * This source code is licensed under the ISC license.
  * See the LICENSE file in the root directory of this source tree.
  */
+const Terminal = createLucideIcon("Terminal", [
+  ["polyline", { points: "4 17 10 11 4 5", key: "akl6gq" }],
+  ["line", { x1: "12", x2: "20", y1: "19", y2: "19", key: "q2wloq" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
 const Trash2 = createLucideIcon("Trash2", [
   ["path", { d: "M3 6h18", key: "d0wm0j" }],
   ["path", { d: "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6", key: "4alrt4" }],
   ["path", { d: "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2", key: "v07s0e" }],
   ["line", { x1: "10", x2: "10", y1: "11", y2: "17", key: "1uufr5" }],
   ["line", { x1: "14", x2: "14", y1: "11", y2: "17", key: "xtxkd" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const TriangleAlert = createLucideIcon("TriangleAlert", [
+  [
+    "path",
+    {
+      d: "m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3",
+      key: "wmoenq"
+    }
+  ],
+  ["path", { d: "M12 9v4", key: "juzpu7" }],
+  ["path", { d: "M12 17h.01", key: "p32p05" }]
+]);
+/**
+ * @license lucide-react v0.400.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */
+const User = createLucideIcon("User", [
+  ["path", { d: "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2", key: "975kel" }],
+  ["circle", { cx: "12", cy: "7", r: "4", key: "17ys0d" }]
 ]);
 /**
  * @license lucide-react v0.400.0 - ISC
@@ -8622,6 +8778,7 @@ function Sidebar() {
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => activePanel === "skills" ? closePanel() : openPanel("skills"), className: iconClass("skills"), title: "Skills", children: /* @__PURE__ */ jsxRuntimeExports.jsx(BookOpen, { size: 16 }) }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => activePanel === "learning" ? closePanel() : openPanel("learning"), className: iconClass("learning"), title: "Learning Queue", children: /* @__PURE__ */ jsxRuntimeExports.jsx(GraduationCap, { size: 16 }) }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => activePanel === "git" ? closePanel() : openPanel("git"), className: iconClass("git"), title: "Git", children: /* @__PURE__ */ jsxRuntimeExports.jsx(GitBranch, { size: 16 }) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => activePanel === "traces" ? closePanel() : openPanel("traces"), className: iconClass("traces"), title: "Traces", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Activity, { size: 16 }) }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: openSettings, className: "p-1.5 rounded-md text-[var(--text3)] hover:text-[var(--text2)] hover:bg-[var(--surface2)] ml-auto", title: "Settings", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Settings, { size: 16 }) }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: toggleSidebar, className: "p-1.5 rounded-md text-[var(--text3)] hover:text-[var(--text2)] hover:bg-[var(--surface2)]", title: "Collapse", children: /* @__PURE__ */ jsxRuntimeExports.jsx(PanelLeftClose, { size: 16 }) })
           ] })
@@ -15951,16 +16108,19 @@ function AssistantMessage({ message }) {
 }
 const useSettingsStore = create((set, get2) => ({
   model: DEFAULT_MODEL,
+  provider: "deepseek",
+  providers: [],
   permission: DEFAULT_PERMISSION,
   theme: DEFAULT_THEME,
   language: DEFAULT_LANGUAGE,
   feishuConfigured: false,
   feishuAppId: "",
   feishuHint: "",
-  setModel: (model) => {
-    set({ model });
+  setModel: (model, provider) => {
+    set({ model, provider: provider || get2().provider });
     localStorage.setItem("mai-model", model);
-    api.setModel(model).catch(() => {
+    if (provider) localStorage.setItem("mai-provider", provider);
+    api.setModel(model, provider || get2().provider).catch(() => {
     });
   },
   setModelFromServer: (model) => {
@@ -15993,12 +16153,24 @@ const useSettingsStore = create((set, get2) => ({
     } catch {
     }
   },
+  fetchProviders: async () => {
+    try {
+      const resp = await api.fetchProviders();
+      set({
+        providers: resp.providers,
+        provider: resp.current || "deepseek",
+        model: resp.current_model || resp.providers.find((p2) => p2.active)?.default_model || DEFAULT_MODEL
+      });
+    } catch {
+    }
+  },
   hydrate: () => {
     const model = localStorage.getItem("mai-model") || DEFAULT_MODEL;
+    const provider = localStorage.getItem("mai-provider") || "deepseek";
     const perm = localStorage.getItem("mai-perm") || DEFAULT_PERMISSION;
     const theme = localStorage.getItem("mai-theme") || DEFAULT_THEME;
     const lang = localStorage.getItem("mai-lang") || DEFAULT_LANGUAGE;
-    set({ model, permission: perm, theme, language: lang });
+    set({ model, provider, permission: perm, theme, language: lang });
     applyTheme(theme);
   }
 }));
@@ -16397,6 +16569,7 @@ const useWSStore = create((set, get2) => ({
   status: "disconnected",
   reconnectAttempts: 0,
   serverUrl: "",
+  eventTick: 0,
   connect: (messageHandler) => {
     const { socket, status } = get2();
     if (socket && (status === "connected" || status === "connecting")) {
@@ -16412,6 +16585,7 @@ const useWSStore = create((set, get2) => ({
     ws.onmessage = (e) => {
       try {
         const event = JSON.parse(e.data);
+        set((s2) => ({ eventTick: s2.eventTick + 1 }));
         messageHandler(event);
       } catch (err) {
         console.error("[ws] Failed to parse message:", err);
@@ -16494,14 +16668,17 @@ function InputArea({ onSubmit }) {
   const textareaRef = reactExports.useRef(null);
   const isStreaming = useChatStore((s2) => s2.isStreaming);
   const model = useSettingsStore((s2) => s2.model);
+  const provider = useSettingsStore((s2) => s2.provider);
+  const providers = useSettingsStore((s2) => s2.providers);
   const permission = useSettingsStore((s2) => s2.permission);
   const setModel = useSettingsStore((s2) => s2.setModel);
   const setPermission = useSettingsStore((s2) => s2.setPermission);
   const send = useWSStore((s2) => s2.send);
   const cycleModel = () => {
-    const idx = MODELS.indexOf(model);
-    const next = MODELS[(idx + 1) % MODELS.length];
-    setModel(next);
+    const list = providers.find((p2) => p2.name === provider)?.models || MODELS;
+    const idx = list.indexOf(model);
+    const next = list[(idx + 1) % list.length] || MODELS[0];
+    setModel(next, provider);
   };
   const cyclePermission = () => {
     const opts = PERMISSION_OPTIONS.map((o2) => o2.value);
@@ -17180,6 +17357,516 @@ function LearningPanel() {
     ] })
   ] });
 }
+const useTraceStore = create((set, get2) => ({
+  sessions: [],
+  loading: false,
+  selectedId: null,
+  selectedTitle: "",
+  spans: [],
+  summary: null,
+  error: null,
+  fetchSessions: async () => {
+    try {
+      const res = await fetch("/api/traces");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      set({ sessions: data, error: null });
+    } catch (e) {
+      set({ error: e.message });
+    }
+  },
+  selectSession: async (id2) => {
+    if (!id2) {
+      set({ selectedId: null, selectedTitle: "", spans: [], summary: null });
+      return;
+    }
+    set({ loading: true, selectedId: id2 });
+    try {
+      const res = await fetch(`/api/traces/${id2}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      set({
+        spans: data.spans || [],
+        summary: data.summary || null,
+        selectedTitle: data.title || "",
+        loading: false,
+        error: null
+      });
+    } catch (e) {
+      set({ loading: false, error: e.message });
+    }
+  }
+}));
+function fmtCost(cost) {
+  if (cost <= 0) return "$0";
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(3)}`;
+}
+function fmtTokens(n2) {
+  if (n2 >= 1e3) return `${(n2 / 1e3).toFixed(1)}K`;
+  return `${n2}`;
+}
+function fmtTime(ts) {
+  try {
+    const d2 = new Date(ts);
+    return d2.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return ts;
+  }
+}
+function fmtDur(ms) {
+  if (!ms) return "—";
+  if (ms < 1e3) return `${Math.round(ms)}ms`;
+  return `${(ms / 1e3).toFixed(1)}s`;
+}
+function fmtAge(ts) {
+  const diff = Date.now() - ts * 1e3;
+  if (diff < 6e4) return "刚刚";
+  if (diff < 36e5) return `${Math.floor(diff / 6e4)}m ago`;
+  if (diff < 864e5) return `${Math.floor(diff / 36e5)}h ago`;
+  return `${Math.floor(diff / 864e5)}d ago`;
+}
+function spanKind(span) {
+  if (span.type === "user") return "user";
+  if (span.type === "llm") return "llm";
+  if (span.type === "tool") return "tool";
+  if (span.type === "brain") return "brain";
+  return "other";
+}
+function kindBadge(span) {
+  const kind = spanKind(span);
+  if (span.is_error) return { text: "错误", cls: "bg-red-500/15 text-red-500" };
+  if (kind === "user") return { text: "用户", cls: "bg-sky-500/15 text-sky-500" };
+  if (kind === "llm") return { text: "AI", cls: "bg-[var(--accent)]/15 text-[var(--accent)]" };
+  if (kind === "brain") return { text: "Brain", cls: "bg-purple-500/15 text-purple-500" };
+  if (kind === "tool") {
+    switch (span.category) {
+      case "read":
+        return { text: "读", cls: "bg-emerald-500/15 text-emerald-500" };
+      case "write":
+        return { text: "写", cls: "bg-amber-500/15 text-amber-500" };
+      case "exec":
+        return { text: "执行", cls: "bg-orange-500/15 text-orange-500" };
+      case "net":
+        return { text: "网络", cls: "bg-teal-500/15 text-teal-500" };
+      default:
+        return { text: "工具", cls: "bg-emerald-500/15 text-emerald-500" };
+    }
+  }
+  return { text: span.type || "?", cls: "bg-[var(--surface2)] text-[var(--text3)]" };
+}
+function spanIcon(span) {
+  const kind = spanKind(span);
+  if (kind === "user") return /* @__PURE__ */ jsxRuntimeExports.jsx(User, { size: 12 });
+  if (kind === "llm") return /* @__PURE__ */ jsxRuntimeExports.jsx(Cpu, { size: 12 });
+  if (kind === "brain") return /* @__PURE__ */ jsxRuntimeExports.jsx(Layers, { size: 12 });
+  if (kind === "tool") {
+    switch (span.category) {
+      case "read":
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(Eye, { size: 12 });
+      case "write":
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(FilePen, { size: 12 });
+      case "exec":
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(Terminal, { size: 12 });
+      case "net":
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(Globe, { size: 12 });
+      default:
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(Wrench, { size: 12 });
+    }
+  }
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(Play, { size: 12 });
+}
+function spanTitleColor(span) {
+  if (span.is_error) return "text-red-500";
+  const kind = spanKind(span);
+  if (kind === "user") return "text-sky-500";
+  if (kind === "llm") return "text-[var(--accent)]";
+  if (kind === "brain") return "text-purple-500";
+  if (kind === "tool") {
+    switch (span.category) {
+      case "write":
+        return "text-amber-500";
+      case "exec":
+        return "text-orange-500";
+      case "net":
+        return "text-teal-500";
+      default:
+        return "text-emerald-500";
+    }
+  }
+  return "text-[var(--text3)]";
+}
+function spanTitle(span) {
+  if (span.label) return span.label;
+  const kind = spanKind(span);
+  if (kind === "user") return (span.text || "用户输入").split("\n")[0];
+  if (kind === "llm") return span.model || "LLM";
+  if (kind === "tool") return span.tool || "tool";
+  return span.brain || span.type;
+}
+function Block({ title, children, danger }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-1", children: title }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("pre", { className: `bg-[var(--bg)] rounded p-2 overflow-x-auto text-[10px] leading-relaxed max-h-64 overflow-y-auto whitespace-pre-wrap break-all ${danger ? "text-red-400" : "text-[var(--text2)]"}`, children })
+  ] });
+}
+function SpanInspector({ span, index }) {
+  const [open, setOpen] = reactExports.useState(false);
+  const kind = spanKind(span);
+  const isLlm = kind === "llm";
+  const isTool = kind === "tool";
+  const badge = kindBadge(span);
+  const hasDetail = !!(span.text || isTool && (span.args !== void 0 || span.result !== void 0) || kind === "brain" && span.extra || isLlm);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "relative", children: [
+    open && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ml-[21px] px-3 pb-3 pt-1 space-y-2 text-[11px]", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-wrap gap-x-4 gap-y-0.5 text-[var(--text2)] border-b border-[var(--border)] pb-1.5", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "#",
+          index
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtTime(span.ts) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "turn ",
+          span.turn ?? "—"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "dur ",
+          fmtDur(span.duration_ms)
+        ] }),
+        isTool && span.category && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+          "类别 ",
+          span.category
+        ] }),
+        isLlm && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            "in ",
+            fmtTokens(span.input_tokens ?? 0)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            "out ",
+            fmtTokens(span.output_tokens ?? 0)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+            "finish ",
+            span.finish_reason || "—"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtCost(span.cost ?? 0) }),
+          span.extra?.usage_estimated ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--text3)]", children: "(估算)" }) : null
+        ] })
+      ] }),
+      span.text && /* @__PURE__ */ jsxRuntimeExports.jsxs(Block, { title: kind === "user" ? "User Input" : "AI Output", children: [
+        span.text,
+        span.text_truncated ? "\n…(truncated)" : ""
+      ] }),
+      isTool && span.args !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(Block, { title: "Input", children: typeof span.args === "string" ? span.args : JSON.stringify(span.args, null, 2) }),
+      isTool && span.result !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(Block, { title: "Output", danger: span.is_error, children: [
+        span.result,
+        span.result_truncated ? "\n…(truncated)" : ""
+      ] }),
+      span.extra && Object.keys(span.extra).length > 0 && !isLlm && /* @__PURE__ */ jsxRuntimeExports.jsx(Block, { title: "Extra", children: JSON.stringify(span.extra, null, 2) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        onClick: () => hasDetail && setOpen(!open),
+        className: `w-full flex items-center gap-2 py-1.5 pr-2 text-left rounded transition-colors ${hasDetail ? "hover:bg-[var(--surface2)]" : "cursor-default"} ${open ? "bg-[var(--surface2)]/60" : ""}`,
+        children: [
+          hasDetail ? open ? /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronDown, { size: 12, className: "text-[var(--text3)] shrink-0 ml-[2px]" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronRight, { size: 12, className: "text-[var(--text3)] shrink-0 ml-[2px]" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-[14px] shrink-0" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `shrink-0 ${spanTitleColor(span)}`, children: spanIcon(span) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `shrink-0 text-[9px] font-medium px-1.5 py-px rounded ${badge.cls}`, children: badge.text }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)] font-mono shrink-0 w-6 text-right", children: index }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-xs font-medium truncate flex-1 ${spanTitleColor(span)}`, title: spanTitle(span), children: spanTitle(span) }),
+          span.is_error && /* @__PURE__ */ jsxRuntimeExports.jsx(TriangleAlert, { size: 12, className: "text-red-500 shrink-0" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)] shrink-0 tabular-nums", children: fmtDur(span.duration_ms) }),
+          isLlm && span.total_tokens !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-[10px] text-[var(--text3)] shrink-0 tabular-nums", children: [
+            fmtTokens(span.total_tokens),
+            " tok"
+          ] }),
+          isLlm && span.cost !== void 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)] shrink-0 tabular-nums", children: fmtCost(span.cost) })
+        ]
+      }
+    )
+  ] });
+}
+function TraceOverview({ spans }) {
+  const bars = reactExports.useMemo(() => {
+    const parsed = spans.map((s2) => ({
+      span: s2,
+      start: new Date(s2.ts).getTime(),
+      dur: Math.max(s2.duration_ms || 0, 1)
+    }));
+    if (parsed.length === 0) return [];
+    const min = Math.min(...parsed.map((p2) => p2.start));
+    const max = Math.max(...parsed.map((p2) => p2.start + p2.dur));
+    const range = Math.max(max - min, 1);
+    return parsed.map((p2) => ({
+      kind: spanKind(p2.span),
+      category: p2.span.category,
+      isError: p2.span.is_error,
+      left: (p2.start - min) / range * 100,
+      width: Math.max(p2.dur / range * 100, 1.2)
+    }));
+  }, [spans]);
+  if (bars.length === 0) return null;
+  const barColor = (kind, category, isError) => {
+    if (isError) return "bg-red-500";
+    if (kind === "user") return "bg-sky-500";
+    if (kind === "llm") return "bg-[var(--accent)]";
+    if (kind === "brain") return "bg-purple-500";
+    if (kind === "tool") {
+      if (category === "write") return "bg-amber-500";
+      if (category === "exec") return "bg-orange-500";
+      if (category === "net") return "bg-teal-500";
+      return "bg-emerald-500";
+    }
+    return "bg-[var(--text3)]";
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 py-2 border-b border-[var(--border)]", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-1 flex items-center gap-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Clock, { size: 10 }),
+      " Timeline"
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "relative h-4 rounded bg-[var(--bg)] overflow-hidden", children: bars.map((b2, i2) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "div",
+      {
+        className: `absolute top-0 bottom-0 rounded-sm opacity-80 ${barColor(b2.kind, b2.category, b2.isError)}`,
+        style: { left: `${b2.left}%`, width: `${b2.width}%` },
+        title: `${b2.kind}${b2.category ? `/${b2.category}` : ""}${b2.isError ? " (error)" : ""} @ ${b2.left.toFixed(1)}%`
+      },
+      i2
+    )) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-3 mt-1 text-[9px] text-[var(--text3)]", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-sky-500 inline-block" }),
+        " 用户"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-[var(--accent)] inline-block" }),
+        " AI"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-emerald-500 inline-block" }),
+        " 读"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-amber-500 inline-block" }),
+        " 写"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-orange-500 inline-block" }),
+        " 执行"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-teal-500 inline-block" }),
+        " 网络"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "w-2 h-2 rounded-sm bg-red-500 inline-block" }),
+        " 错误"
+      ] })
+    ] })
+  ] });
+}
+function TracesPanel() {
+  const {
+    sessions,
+    loading,
+    selectedId,
+    selectedTitle,
+    spans,
+    summary,
+    error: error2,
+    fetchSessions,
+    selectSession
+  } = useTraceStore();
+  const eventTick = useWSStore((s2) => s2.eventTick);
+  const refreshTimer = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    fetchSessions();
+  }, []);
+  reactExports.useEffect(() => {
+    if (eventTick === 0) return;
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      fetchSessions();
+      if (selectedId) selectSession(selectedId);
+    }, 500);
+    return () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    };
+  }, [eventTick]);
+  const ledger = reactExports.useMemo(() => {
+    const rows = [];
+    let lastTurn = null;
+    let idx = 0;
+    for (const s2 of spans) {
+      if (spanKind(s2) === "user") {
+        rows.push({ kind: "user", span: s2 });
+        lastTurn = null;
+        idx++;
+        continue;
+      }
+      const t2 = s2.turn ?? 0;
+      if (lastTurn === null || t2 !== lastTurn) {
+        rows.push({ kind: "turn", turn: t2 });
+        lastTurn = t2;
+      }
+      rows.push({ kind: "span", span: s2, index: idx });
+      idx++;
+    }
+    return rows;
+  }, [spans]);
+  if (selectedId) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col h-full", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 py-3 border-b border-[var(--border)]", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            onClick: () => selectSession(null),
+            className: "flex items-center gap-1 text-xs text-[var(--accent)] hover:underline mb-2",
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(ArrowLeft, { size: 13 }),
+              " Back to sessions"
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("h4", { className: "text-sm font-bold text-[var(--text)] truncate", title: selectedId, children: selectedTitle || selectedId }),
+        selectedTitle && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-[10px] text-[var(--text3)] font-mono mt-0.5", children: selectedId }),
+        summary && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "mt-2 grid grid-cols-2 gap-1.5", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] text-[var(--text2)]", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Bot, { size: 12, className: "text-[var(--accent)]" }),
+            " ",
+            summary.llm_calls,
+            " LLM"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] text-[var(--text2)]", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Wrench, { size: 12, className: "text-emerald-500" }),
+            " ",
+            summary.tool_calls,
+            " tools"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] text-[var(--text2)]", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Coins, { size: 12, className: "text-amber-500" }),
+            " ",
+            fmtCost(summary.total_cost)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] text-[var(--text2)]", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Clock, { size: 12, className: "text-sky-500" }),
+            " ",
+            fmtDur(summary.total_duration_ms)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] text-[var(--text2)]", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Layers, { size: 12, className: "text-purple-500" }),
+            " ",
+            fmtTokens(summary.total_tokens),
+            " tok"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] text-[var(--text2)]", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(TriangleAlert, { size: 12, className: "text-red-500" }),
+            " ",
+            summary.tool_errors,
+            " errors"
+          ] })
+        ] })
+      ] }),
+      !loading && spans.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(TraceOverview, { spans }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 overflow-y-auto py-2 px-2", children: [
+        loading && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-xs text-[var(--text3)] text-center py-8", children: "Loading trace..." }),
+        !loading && spans.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-xs text-[var(--text3)] text-center py-8", children: "No spans in this trace." }),
+        ledger.map((row, i2) => {
+          if (row.kind === "user") {
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "my-2 first:mt-0 mx-1 rounded-md bg-sky-500/10 border border-sky-500/20 px-2.5 py-1.5", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-1.5 text-[10px] font-semibold text-sky-500 mb-0.5", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(User, { size: 11 }),
+                " 用户 · ",
+                fmtTime(row.span.ts)
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-[11px] text-[var(--text)] whitespace-pre-wrap break-all", children: [
+                row.span.text || row.span.label || "",
+                row.span.text_truncated ? " …" : ""
+              ] })
+            ] }, `user-${i2}`);
+          }
+          if (row.kind === "turn") {
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 my-1.5 first:mt-0", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-[10px] font-bold text-[var(--text3)] uppercase tracking-widest shrink-0", children: [
+                "Step ",
+                row.turn
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 h-px bg-[var(--border)]" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[9px] text-[var(--text3)]", children: "—" })
+            ] }, `turn-${row.turn}-${i2}`);
+          }
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(SpanInspector, { span: row.span, index: row.index ?? 0 }, `span-${row.span.ts}-${i2}`);
+        }),
+        summary && summary.tool_failures_top && Object.keys(summary.tool_failures_top).length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pt-2 mt-2 border-t border-[var(--border)]", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-1.5", children: "Tool failures" }),
+          Object.entries(summary.tool_failures_top).map(([name, count]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between text-[11px] py-0.5", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[var(--text2)] font-mono", children: name }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "text-red-500 font-medium", children: [
+              count,
+              "×"
+            ] })
+          ] }, name))
+        ] })
+      ] })
+    ] });
+  }
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col h-full", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-4 py-3 border-b border-[var(--border)] flex items-center justify-between", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h4", { className: "text-sm font-semibold text-[var(--text)]", children: "Traces" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: fetchSessions,
+          className: "text-[10px] text-[var(--accent)] hover:underline",
+          children: "Refresh"
+        }
+      )
+    ] }),
+    error2 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "px-4 py-2 text-[11px] text-red-500", children: error2 }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 overflow-y-auto p-2 space-y-1", children: [
+      sessions.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "text-[11px] text-[var(--text3)] text-center py-8", children: [
+        "暂无轨迹。",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("br", {}),
+        "运行一次对话后这里会显示 span 级记录。"
+      ] }),
+      sessions.map((s2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "button",
+        {
+          onClick: () => selectSession(s2.session_id),
+          className: "w-full text-left px-3 py-2 rounded-md hover:bg-[var(--surface2)] transition-colors",
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between gap-2", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-xs font-medium text-[var(--text)] truncate", children: s2.title || s2.session_id }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)] shrink-0", children: fmtAge(s2.updated_at) })
+            ] }),
+            s2.title && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-[9px] text-[var(--text3)] font-mono truncate mt-0.5", children: s2.session_id }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center gap-2 mt-1 text-[10px] text-[var(--text3)]", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                s2.llm_calls,
+                " LLM"
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "·" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                s2.tool_calls,
+                " tools"
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "·" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                fmtTokens(s2.total_tokens),
+                " tok"
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "·" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtCost(s2.total_cost) })
+            ] })
+          ]
+        },
+        s2.session_id
+      ))
+    ] })
+  ] });
+}
 function PanelContainer() {
   const activePanel = useUIStore((s2) => s2.activePanel);
   const closePanel = useUIStore((s2) => s2.closePanel);
@@ -17188,7 +17875,8 @@ function PanelContainer() {
     memory: "Memory",
     skills: "Skills",
     git: "Git",
-    learning: "学习队列"
+    learning: "学习队列",
+    traces: "Traces"
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "w-[340px] bg-[var(--surface)] border-l border-[var(--border)] flex flex-col shrink-0 animate-slide-in", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between px-4 py-3 border-b border-[var(--border)]", children: [
@@ -17206,7 +17894,8 @@ function PanelContainer() {
       activePanel === "memory" && /* @__PURE__ */ jsxRuntimeExports.jsx(MemoryPanel, {}),
       activePanel === "skills" && /* @__PURE__ */ jsxRuntimeExports.jsx(SkillsPanel, {}),
       activePanel === "git" && /* @__PURE__ */ jsxRuntimeExports.jsx(GitPanel, {}),
-      activePanel === "learning" && /* @__PURE__ */ jsxRuntimeExports.jsx(LearningPanel, {})
+      activePanel === "learning" && /* @__PURE__ */ jsxRuntimeExports.jsx(LearningPanel, {}),
+      activePanel === "traces" && /* @__PURE__ */ jsxRuntimeExports.jsx(TracesPanel, {})
     ] })
   ] });
 }
@@ -17216,11 +17905,419 @@ function SettingsModal() {
   const currentLang = useSettingsStore((s2) => s2.language);
   const t2 = (zh2, en) => currentLang === "zh" ? zh2 : en;
   return /* @__PURE__ */ jsxRuntimeExports.jsx(Modal, { open, onClose: close, title: t2("设置", "Settings"), maxWidth: "max-w-md", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-6", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(ModelSection, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ThemeSection, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(LanguageSection, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(WorkspaceSection, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(FeishuSection, {})
   ] }) });
+}
+function ModelSection() {
+  const lang = useSettingsStore((s2) => s2.language);
+  const model = useSettingsStore((s2) => s2.model);
+  const provider = useSettingsStore((s2) => s2.provider);
+  const providers = useSettingsStore((s2) => s2.providers);
+  const setModel = useSettingsStore((s2) => s2.setModel);
+  const [expanded, setExpanded] = reactExports.useState(null);
+  const [adding, setAdding] = reactExports.useState(false);
+  const currentProvider = providers.find((p2) => p2.name === provider);
+  const availableModels = currentProvider?.models || [];
+  const handleProviderChange = (name) => {
+    const p2 = providers.find((x2) => x2.name === name);
+    if (!p2) return;
+    setModel(p2.default_model || p2.models[0] || "", p2.name);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(Section, { label: lang === "zh" ? "模型 / Model" : "Model", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "space-y-1 mb-3", children: providers.map((p2) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-[var(--border)] overflow-hidden", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "button",
+        {
+          onClick: () => {
+            setExpanded(expanded === p2.name ? null : p2.name);
+            if (provider !== p2.name) handleProviderChange(p2.name);
+          },
+          className: `w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${provider === p2.name ? "bg-[var(--accent)]/10" : "hover:bg-[var(--surface2)]"}`,
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: `text-xs font-medium truncate flex-1 ${provider === p2.name ? "text-[var(--accent)]" : "text-[var(--text)]"}`, children: [
+              p2.label,
+              p2.is_custom && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ml-1 text-[9px] text-[var(--text3)]", children: "(custom)" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: `text-[10px] px-1.5 py-0.5 rounded ${p2.has_key ? "bg-emerald-500/10 text-emerald-500" : "bg-[var(--surface2)] text-[var(--text3)]"}`, children: p2.has_key ? "key ✓" : "no key" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(ChevronRight, { size: 12, className: `text-[var(--text3)] transition-transform ${expanded === p2.name ? "rotate-90" : ""}` })
+          ]
+        }
+      ),
+      expanded === p2.name && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        ProviderEdit,
+        {
+          info: p2,
+          lang,
+          onSaved: () => {
+            setExpanded(null);
+            useSettingsStore.getState().fetchProviders();
+          },
+          onDeleted: () => {
+            setExpanded(null);
+            useSettingsStore.getState().fetchProviders();
+          }
+        }
+      )
+    ] }, p2.name)) }),
+    adding ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+      ProviderCreateForm,
+      {
+        lang,
+        onCreated: (name) => {
+          setAdding(false);
+          useSettingsStore.getState().fetchProviders().then(() => handleProviderChange(name));
+        },
+        onCancel: () => setAdding(false)
+      }
+    ) : /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        onClick: () => setAdding(true),
+        className: "w-full py-2 rounded-lg border border-dashed border-[var(--border)] text-xs text-[var(--text3)] hover:text-[var(--text)] hover:border-[var(--accent)] transition-colors",
+        children: [
+          "+ ",
+          lang === "zh" ? "添加提供方" : "Add Provider"
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "mt-3 flex items-center gap-2", children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "select",
+      {
+        value: model,
+        onChange: (e) => setModel(e.target.value, provider),
+        className: "flex-1 bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]",
+        children: [
+          availableModels.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "—" }),
+          availableModels.map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m2, children: m2 }, m2))
+        ]
+      }
+    ) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-1 text-[10px] text-[var(--text3)]", children: lang === "zh" ? "切换模型为热切换，不丢上下文" : "Model switch is hot-swap, keeps context" })
+  ] });
+}
+function ProviderEdit({ info, lang, onSaved, onDeleted }) {
+  const [apiKey, setApiKey] = reactExports.useState("");
+  const [label, setLabel] = reactExports.useState(info.label);
+  const [baseUrl, setBaseUrl] = reactExports.useState(info.base_url);
+  const [models, setModels] = reactExports.useState(info.models);
+  const [saving, setSaving] = reactExports.useState(false);
+  const [discovering, setDiscovering] = reactExports.useState(false);
+  const [newModel, setNewModel] = reactExports.useState("");
+  const [msg, setMsg] = reactExports.useState("");
+  const handleSave = async () => {
+    setSaving(true);
+    setMsg("");
+    try {
+      await api.updateProvider(info.name, {
+        label,
+        base_url: baseUrl,
+        api_key: apiKey || void 0,
+        models
+      });
+      setMsg(lang === "zh" ? "已保存" : "Saved");
+      onSaved();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    setMsg("");
+    try {
+      const res = await api.discoverModels(info.name);
+      setModels(res.models);
+      setMsg(lang === "zh" ? `发现 ${res.models.length} 个模型` : `Discovered ${res.models.length} models`);
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setDiscovering(false);
+    }
+  };
+  const handleAddModel = async () => {
+    if (!newModel.trim()) return;
+    try {
+      await api.addProviderModel(info.name, newModel.trim());
+      const res = await api.fetchProviders();
+      setModels(res.providers.find((p2) => p2.name === info.name)?.models || models);
+      setNewModel("");
+    } catch (e) {
+      setMsg(e.message);
+    }
+  };
+  const handleDelete = async () => {
+    if (!window.confirm(`删除提供方 ${info.name}？`)) return;
+    try {
+      await api.deleteProvider(info.name);
+      onDeleted();
+    } catch (e) {
+      setMsg(e.message);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "px-3 pb-3 pt-1 space-y-2 bg-[var(--surface2)]/30", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide", children: lang === "zh" ? "API 密钥" : "API Key" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        type: "password",
+        value: apiKey,
+        onChange: (e) => setApiKey(e.target.value),
+        placeholder: info.has_key ? lang === "zh" ? "已配置，输入以替换（留空保留）" : "Configured — type to replace" : lang === "zh" ? "输入 API 密钥，或留空使用环境认证" : "Enter API key, or leave empty for env auth",
+        className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono placeholder:text-[var(--text3)]"
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide pt-1", children: lang === "zh" ? "自定义设置" : "Custom settings" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-1.5", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: label,
+          onChange: (e) => setLabel(e.target.value),
+          placeholder: lang === "zh" ? "显示名称" : "Display name",
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)]"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: baseUrl,
+          onChange: (e) => setBaseUrl(e.target.value),
+          placeholder: lang === "zh" ? "API 地址" : "API base URL",
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide pt-1", children: lang === "zh" ? "模型目录" : "Model catalog" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-wrap gap-1", children: [
+      models.map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "px-1.5 py-0.5 rounded bg-[var(--surface2)] text-[10px] text-[var(--text2)] font-mono", children: m2 }, m2)),
+      models.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)]", children: lang === "zh" ? "模型选择器中将不显示任何模型；目录外 ID 仍可直接发送。" : "No models; out-of-catalog IDs still work." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-1.5", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: handleDiscover,
+          disabled: discovering,
+          className: "flex-1 py-1.5 rounded-md bg-[var(--surface2)] border border-[var(--border)] text-[11px] text-[var(--text2)] hover:text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-50",
+          children: discovering ? "..." : lang === "zh" ? "获取可用模型" : "Get models"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: newModel,
+          onChange: (e) => setNewModel(e.target.value),
+          onKeyDown: (e) => {
+            if (e.key === "Enter") handleAddModel();
+          },
+          placeholder: lang === "zh" ? "添加模型" : "Add model",
+          className: "flex-1 bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono placeholder:text-[var(--text3)]"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: handleAddModel,
+          className: "px-2.5 py-1.5 rounded-md bg-[var(--surface2)] border border-[var(--border)] text-[11px] text-[var(--text2)] hover:text-[var(--text)]",
+          children: "+"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2 pt-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: handleSave,
+          disabled: saving,
+          className: "flex-1 py-1.5 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-50",
+          children: saving ? "..." : lang === "zh" ? "保存" : "Save"
+        }
+      ),
+      info.is_custom && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: handleDelete,
+          className: "px-3 py-1.5 rounded-md bg-red-500/10 text-red-500 text-[11px] hover:bg-red-500/20",
+          children: lang === "zh" ? "删除" : "Delete"
+        }
+      )
+    ] }),
+    msg && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-[var(--text2)]", children: msg })
+  ] });
+}
+function ProviderCreateForm({ lang, onCreated, onCancel }) {
+  const [name, setName] = reactExports.useState("");
+  const [label, setLabel] = reactExports.useState("");
+  const [baseUrl, setBaseUrl] = reactExports.useState("");
+  const [protocol, setProtocol] = reactExports.useState("openai-completions");
+  const [apiKey, setApiKey] = reactExports.useState("");
+  const [models, setModels] = reactExports.useState([]);
+  const [newModel, setNewModel] = reactExports.useState("");
+  const [saving, setSaving] = reactExports.useState(false);
+  const [discovering, setDiscovering] = reactExports.useState(false);
+  const [msg, setMsg] = reactExports.useState("");
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    setMsg("");
+    try {
+      await api.createProvider({ name, label, base_url: baseUrl, protocol, api_key: apiKey });
+      const res = await api.discoverModels(name);
+      setModels(res.models);
+      setMsg(lang === "zh" ? `发现 ${res.models.length} 个模型` : `Discovered ${res.models.length} models`);
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setDiscovering(false);
+    }
+  };
+  const handleAddModel = () => {
+    if (!newModel.trim()) return;
+    if (!models.includes(newModel.trim())) setModels([...models, newModel.trim()]);
+    setNewModel("");
+  };
+  const handleCreate = async () => {
+    setSaving(true);
+    setMsg("");
+    try {
+      await api.createProvider({ name, label, base_url: baseUrl, protocol, api_key: apiKey, models });
+      onCreated(name);
+    } catch (e) {
+      setMsg(e.message);
+      setSaving(false);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rounded-lg border border-[var(--border)] p-3 space-y-2 bg-[var(--surface2)]/30", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "text-[11px] font-semibold text-[var(--text)]", children: lang === "zh" ? "自定义提供方" : "Custom provider" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-0.5", children: lang === "zh" ? "Provider ID" : "Provider ID" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: name,
+          onChange: (e) => setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "")),
+          placeholder: "acme-gateway",
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "mt-0.5 text-[9px] text-[var(--text3)]", children: lang === "zh" ? "以小写字母开头的标识，在请求中唯一标识该提供方，并用于派生凭据名。" : "Lowercase identifier, unique per provider, derives credential name." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-0.5", children: lang === "zh" ? "显示名称" : "Display name" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: label,
+          onChange: (e) => setLabel(e.target.value),
+          placeholder: lang === "zh" ? "显示名称" : "Display name",
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)]"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-0.5", children: lang === "zh" ? "API 地址" : "API base URL" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          value: baseUrl,
+          onChange: (e) => setBaseUrl(e.target.value),
+          placeholder: "https://gateway.example/v1",
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-0.5", children: lang === "zh" ? "API 协议" : "API protocol" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "select",
+        {
+          value: protocol,
+          onChange: (e) => setProtocol(e.target.value),
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono",
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "openai-completions", children: "openai-completions" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "anthropic-messages", children: "anthropic-messages" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "google-gemini", children: "google-gemini" })
+          ]
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-0.5", children: lang === "zh" ? "API 密钥" : "API key" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "password",
+          value: apiKey,
+          onChange: (e) => setApiKey(e.target.value),
+          placeholder: lang === "zh" ? "输入 API 密钥" : "Enter API key",
+          className: "w-full bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "block text-[10px] font-semibold text-[var(--text3)] uppercase tracking-wide mb-0.5", children: lang === "zh" ? "模型目录" : "Model catalog" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-1.5 mb-1.5", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: handleDiscover,
+            disabled: discovering || !name || !baseUrl,
+            className: "flex-1 py-1.5 rounded-md bg-[var(--surface2)] border border-[var(--border)] text-[11px] text-[var(--text2)] hover:text-[var(--text)] hover:border-[var(--accent)] transition-colors disabled:opacity-40",
+            children: discovering ? "..." : lang === "zh" ? "获取可用模型" : "Get models"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            value: newModel,
+            onChange: (e) => setNewModel(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Enter") handleAddModel();
+            },
+            placeholder: lang === "zh" ? "添加模型" : "Add model",
+            className: "flex-1 bg-[var(--bg)] border border-[var(--border)] rounded-md px-2.5 py-1.5 text-xs text-[var(--text)] outline-none focus:border-[var(--accent)] font-mono placeholder:text-[var(--text3)]"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            onClick: handleAddModel,
+            className: "px-2.5 rounded-md bg-[var(--surface2)] border border-[var(--border)] text-[11px] text-[var(--text2)] hover:text-[var(--text)]",
+            children: "+"
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-wrap gap-1", children: [
+        models.map((m2) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "px-1.5 py-0.5 rounded bg-[var(--surface2)] text-[10px] text-[var(--text2)] font-mono", children: m2 }, m2)),
+        models.length === 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "text-[10px] text-[var(--text3)]", children: lang === "zh" ? "模型选择器中将不显示任何模型；目录外 ID 仍可直接发送。" : "No models; out-of-catalog IDs still work." })
+      ] })
+    ] }),
+    msg && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-[10px] text-[var(--text2)]", children: msg }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex gap-2 pt-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: onCancel,
+          className: "flex-1 py-1.5 rounded-md bg-[var(--surface2)] border border-[var(--border)] text-[11px] text-[var(--text2)] hover:text-[var(--text)]",
+          children: lang === "zh" ? "取消" : "Cancel"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          onClick: handleCreate,
+          disabled: saving || !name || !baseUrl,
+          className: "flex-1 py-1.5 rounded-md bg-[var(--accent)] text-white text-[11px] font-medium hover:opacity-90 disabled:opacity-40",
+          children: saving ? "..." : lang === "zh" ? "创建提供方" : "Create provider"
+        }
+      )
+    ] })
+  ] });
 }
 function ThemeSection() {
   const theme = useSettingsStore((s2) => s2.theme);
@@ -17497,6 +18594,7 @@ function App() {
   const fetchTools = useToolStore((s2) => s2.fetchTools);
   const fetchGitStatus = useGitStore((s2) => s2.fetchGitStatus);
   const fetchFeishuStatus = useSettingsStore((s2) => s2.fetchFeishuStatus);
+  const fetchProviders = useSettingsStore((s2) => s2.fetchProviders);
   const permission = useSettingsStore((s2) => s2.permission);
   const closePanel = useUIStore((s2) => s2.closePanel);
   useUIStore((s2) => s2.openSettings);
@@ -17508,6 +18606,7 @@ function App() {
     fetchTools();
     fetchGitStatus();
     fetchFeishuStatus();
+    fetchProviders();
   }, []);
   reactExports.useEffect(() => {
     createWSHandler({

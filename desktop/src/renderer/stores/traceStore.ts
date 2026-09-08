@@ -4,6 +4,7 @@ import { create } from 'zustand'
 
 export interface TraceSessionInfo {
   session_id: string
+  title?: string
   spans: number
   llm_calls: number
   tool_calls: number
@@ -14,11 +15,15 @@ export interface TraceSessionInfo {
 
 export interface TraceSpan {
   ts: string
-  type: 'llm' | 'tool' | 'brain' | string
+  type: 'llm' | 'tool' | 'brain' | 'user' | string
   session_id: string
   turn: number
   duration_ms: number
   is_error: boolean
+  label?: string                 // 语义化标题（"Read foo.py" / "用户: ..."）
+  category?: 'read' | 'write' | 'exec' | 'net' | string  // 工具副作用类别
+  text?: string                  // user/assistant 消息文本预览
+  text_truncated?: boolean
   model?: string
   input_tokens?: number
   output_tokens?: number
@@ -37,6 +42,7 @@ export interface TraceSummary {
   llm_calls: number
   tool_calls: number
   brain_calls: number
+  user_msgs?: number
   input_tokens: number
   output_tokens: number
   total_tokens: number
@@ -51,6 +57,7 @@ interface TraceState {
   sessions: TraceSessionInfo[]
   loading: boolean
   selectedId: string | null
+  selectedTitle: string
   spans: TraceSpan[]
   summary: TraceSummary | null
   error: string | null
@@ -63,6 +70,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
   sessions: [],
   loading: false,
   selectedId: null,
+  selectedTitle: '',
   spans: [],
   summary: null,
   error: null,
@@ -80,7 +88,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
 
   selectSession: async (id: string | null) => {
     if (!id) {
-      set({ selectedId: null, spans: [], summary: null })
+      set({ selectedId: null, selectedTitle: '', spans: [], summary: null })
       return
     }
     set({ loading: true, selectedId: id })
@@ -91,6 +99,7 @@ export const useTraceStore = create<TraceState>((set, get) => ({
       set({
         spans: data.spans || [],
         summary: data.summary || null,
+        selectedTitle: data.title || '',
         loading: false,
         error: null,
       })

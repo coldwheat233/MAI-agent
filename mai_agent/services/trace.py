@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 TRACE_DIR = ".mai/traces"
 QUEUE_SIZE = 500
+# 单个 span 的文本容量上限。result 给足空间便于排障（工具输出常有 traceback），
+# text（user/assistant 文本预览）只需够辨认意图。
+RESULT_CAP = 8000
+TEXT_CAP = 1500
 
 
 # ── 成本估算（DeepSeek 官方单价，USD / 1K tokens）──────────
@@ -76,9 +80,17 @@ def make_span(
     finish_reason: str = "",
     brain: str = "",
     turn: int = 0,
+    label: str = "",
+    category: str = "",
+    text: str = "",
     extra: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """构造一个 span 事件 dict（jsonl 一行）。"""
+    """构造一个 span 事件 dict（jsonl 一行）。
+
+    label    — 人类可读的一行标题（如 "Read mai_agent/server.py"），前端直接展示
+    category — 工具副作用类别: read | write | exec | net（前端着色/徽标用）
+    text     — user/assistant 消息文本预览（llm span 也可带 AI 回复预览）
+    """
     span: dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "type": span_type,
@@ -87,6 +99,13 @@ def make_span(
         "duration_ms": round(duration_ms, 2),
         "is_error": bool(is_error),
     }
+    if label:
+        span["label"] = label
+    if category:
+        span["category"] = category
+    if text:
+        span["text"] = text[:TEXT_CAP]
+        span["text_truncated"] = len(text) > TEXT_CAP
     if span_type == "llm":
         span["model"] = model
         span["input_tokens"] = int(input_tokens or 0)
@@ -98,14 +117,81 @@ def make_span(
         span["tool"] = tool_name
         if tool_args is not None:
             span["args"] = tool_args
-        span["result"] = (result or "")[:2000]  # 截断避免巨量结果撑爆 jsonl
-        span["result_truncated"] = len(result or "") > 2000
+        span["result"] = (result or "")[:RESULT_CAP]  # 截断避免巨量结果撑爆 jsonl
+        span["result_truncated"] = len(result or "") > RESULT_CAP
     elif span_type == "brain":
         span["brain"] = brain
         span["tool"] = tool_name
     if extra:
         span["extra"] = extra
     return span
+
+
+# ── 工具调用标题（语义化 label）─────────────────────────────
+
+
+def _short(v: Any, n: int = 60) -> str:
+    s = str(v).replace("\n", " ").strip()
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def summarize_tool_call(tool_name: str, args: Any) -> str:
+    """给工具调用生成一行人类可读标题，让 Trace 列表不用点开就知道干了什么。
+
+    只从 args 里挑各工具的"主参数"（路径/命令/查询词），不存在的字段回退工具名。
+    """
+    if not isinstance(args, dict):
+        return tool_name
+    if tool_name in ("Read", "Write", "Edit", "NotebookEdit"):
+        p = args.get("file_path") or args.get("notebook_path") or ""
+        return f"{tool_name} {_short(p)}" if p else tool_name
+    if tool_name == "Bash":
+        return f"Bash: {_short(args.get('command', ''))}"
+    if tool_name == "Grep":
+        return f"Grep /{_short(args.get('pattern', ''), 40)}/"
+    if tool_name == "Glob":
+        return f"Glob {_short(args.get('pattern', ''), 40)}"
+    if tool_name == "WebSearch":
+        return f"WebSearch: {_short(args.get('query', ''))}"
+    if tool_name == "WebFetch":
+        return f"WebFetch: {_short(args.get('url', ''))}"
+    if tool_name == "Agent":
+        return f"Agent: {_short(args.get('description', ''))}"
+    if tool_name == "Workflow":
+        return f"Workflow: {_short(args.get('name', ''))}"
+    if tool_name == "AskUserQuestion":
+        qs = args.get("questions")
+        if isinstance(qs, list) and qs:
+            return f"AskUser: {_short(qs[0].get('question', ''))}"
+        return "AskUserQuestion"
+    if tool_name == "TodoWrite":
+        todos = args.get("todos")
+        n = len(todos) if isinstance(todos, list) else 0
+        return f"TodoWrite ({n} 项)"
+    if tool_name == "Skill":
+        return f"Skill: {_short(args.get('name', ''))}"
+    if tool_name == "SendMessage":
+        return f"SendMessage → {_short(args.get('to') or args.get('agent_id', ''), 30)}"
+    if tool_name.startswith("Memory"):
+        key = args.get("name") or args.get("query") or ""
+        return f"{tool_name} {_short(key, 40)}" if key else tool_name
+    if tool_name.startswith("Git"):
+        return f"{tool_name} {_short(args.get('message', ''), 40)}".rstrip()
+    if tool_name.startswith("Feishu"):
+        key = args.get("query") or args.get("title") or ""
+        return f"{tool_name} {_short(key, 40)}" if key else tool_name
+    if tool_name.startswith("Deploy"):
+        return f"{tool_name} {_short(args.get('target', ''), 40)}".rstrip()
+    return tool_name
+
+
+def tool_category(tool_name: str, is_concurrency_safe: bool) -> str:
+    """工具副作用类别：exec（跑命令）> net（联网）> read/write（按并发安全分级）。"""
+    if tool_name in ("Bash", "DeployRun"):
+        return "exec"
+    if tool_name in ("WebSearch", "WebFetch"):
+        return "net"
+    return "read" if is_concurrency_safe else "write"
 
 
 # ── TraceRecorder ─────────────────────────────────────────
@@ -242,6 +328,17 @@ def load_trace_file(session_id: str, project_root: str = ".") -> list[dict[str, 
     return spans
 
 
+def _title_from_spans(spans: list[dict[str, Any]]) -> str:
+    """从 span 列表提取会话标题：第一个 user span 的首行文本。
+
+    不依赖 SQLite 会话表（进行中的会话可能还没落盘），trace 文件自身即权威来源。
+    """
+    for s in spans:
+        if s.get("type") == "user" and s.get("text"):
+            return " ".join(str(s["text"]).split())[:50]
+    return ""
+
+
 def list_trace_sessions(project_root: str = ".") -> list[dict[str, Any]]:
     """列出项目下所有有 trace 的会话（含统计摘要）。"""
     trace_dir = Path(project_root) / TRACE_DIR
@@ -261,6 +358,7 @@ def list_trace_sessions(project_root: str = ".") -> list[dict[str, Any]]:
         tool_count = sum(1 for s in spans if s.get("type") == "tool")
         sessions.append({
             "session_id": f.stem,
+            "title": _title_from_spans(spans),
             "spans": len(spans),
             "llm_calls": sum(1 for s in spans if s.get("type") == "llm"),
             "tool_calls": tool_count,
@@ -290,6 +388,7 @@ def summarize_trace(spans: list[dict[str, Any]]) -> dict[str, Any]:
         "llm_calls": len(llm_spans),
         "tool_calls": len(tool_spans),
         "brain_calls": len(brain_spans),
+        "user_msgs": sum(1 for s in spans if s.get("type") == "user"),
         "input_tokens": sum(s.get("input_tokens", 0) for s in llm_spans),
         "output_tokens": sum(s.get("output_tokens", 0) for s in llm_spans),
         "total_tokens": sum(s.get("total_tokens", 0) for s in llm_spans),

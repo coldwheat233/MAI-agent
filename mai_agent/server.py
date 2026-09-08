@@ -506,16 +506,28 @@ async def api_session_detail(session_id: str):
 
 @app.get("/api/traces")
 async def api_traces_list():
-    """列出所有有 trace 的会话（含 token/成本/工具数摘要）。"""
+    """列出所有有 trace 的会话（含 token/成本/工具数摘要 + 会话标题）。"""
     from mai_agent.services.trace import list_trace_sessions
+    from mai_agent.session import list_sessions
     cwd = getattr(_config, "project_root", ".") or "."
-    return list_trace_sessions(cwd)
+    traces = list_trace_sessions(cwd)
+    # 标题优先级：trace 首个 user span（list_trace_sessions 已提取）> DB 会话标题
+    # （进行中的会话可能还没落盘 DB，trace 文件是更及时的来源）
+    try:
+        titles = {s["session_id"]: s.get("title", "") for s in list_sessions(cwd)}
+        for t in traces:
+            if not t.get("title"):
+                t["title"] = titles.get(t["session_id"], "")
+    except Exception:
+        pass
+    return traces
 
 
 @app.get("/api/traces/{session_id}")
 async def api_trace_detail(session_id: str):
     """获取一次会话的完整 span 轨迹 + 聚合摘要。"""
-    from mai_agent.services.trace import load_trace_file, summarize_trace
+    from mai_agent.services.trace import load_trace_file, summarize_trace, _title_from_spans
+    from mai_agent.session import list_sessions
     cwd = getattr(_config, "project_root", ".") or "."
     spans = load_trace_file(session_id, cwd)
     if not spans:
@@ -525,8 +537,17 @@ async def api_trace_detail(session_id: str):
             spans = await engine._trace.spans_snapshot()
     if not spans:
         return JSONResponse({"error": "Trace not found"}, 404)
+    # 标题：trace 首个 user span 优先，DB 兜底
+    title = _title_from_spans(spans)
+    if not title:
+        try:
+            title = next((s.get("title", "") for s in list_sessions(cwd)
+                          if s["session_id"] == session_id), "")
+        except Exception:
+            pass
     return {
         "session_id": session_id,
+        "title": title,
         "spans": spans,
         "summary": summarize_trace(spans),
     }

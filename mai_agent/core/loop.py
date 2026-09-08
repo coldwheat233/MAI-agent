@@ -301,6 +301,8 @@ async def agent_loop(
                     duration_ms=(time.monotonic() - llm_start_ms) * 1000,
                     finish_reason=response.finish_reason,
                     turn=step,
+                    label=f"{llm.model} → {len(final_tool_calls or [])} tool call(s)" if final_tool_calls else f"{llm.model} 回复",
+                    text=content_text or "",
                     extra={"usage_estimated": final_usage is None},
                 )
                 await context.trace.record(span)
@@ -428,7 +430,12 @@ async def agent_loop(
             # ── Trace: 工具执行 span ──
             if getattr(context, "trace", None) is not None:
                 try:
-                    from mai_agent.services.trace import make_span
+                    from mai_agent.services.trace import make_span, summarize_tool_call, tool_category
+                    try:
+                        tool_obj = registry.get(block.name)
+                        safe = getattr(tool_obj, "is_concurrency_safe", False)
+                    except KeyError:
+                        safe = False
                     span = make_span(
                         "tool", context.trace.session_id,
                         tool_name=block.name,
@@ -437,6 +444,8 @@ async def agent_loop(
                         is_error=mr.is_error,
                         duration_ms=exec_result.message.duration_ms,
                         turn=step,
+                        label=summarize_tool_call(block.name, block.input),
+                        category=tool_category(block.name, safe),
                     )
                     await context.trace.record(span)
                 except Exception as exc:
