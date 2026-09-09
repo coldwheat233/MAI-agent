@@ -464,13 +464,11 @@ async def _run_repl(config, session_id):
 @click.option("--sandbox", "sandbox_mode", default=None,
               type=click.Choice(["off", "default", "strict"]),
               help="Bash 沙箱模式: off | default | strict")
-@click.option("--serve", is_flag=True, help="启动桌面端服务器 (http://localhost:8765)")
-@click.option("--desktop", is_flag=True, help="启动 Electron 原生桌面应用")
-@click.option("--dev", is_flag=True, help="归一化启动：后端 + 桌面端一条命令")
+@click.option("--desktop", is_flag=True, help="启动桌面应用（唯一启动命令：后端 + Electron）")
 @click.option("--port", default=8765, help="服务器端口 (默认 8765)")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose logging")
 def main(once=None, session="default", plan=False, auto_mode=False,
-         sandbox_mode=None, serve=False, desktop=False, dev=False, port=8765, verbose=False):
+         sandbox_mode=None, desktop=False, port=8765, verbose=False):
     """MAI-agent — Personal Development Agent Platform"""
     _setup_logging(verbose)
     try:
@@ -485,102 +483,13 @@ def main(once=None, session="default", plan=False, auto_mode=False,
         config.permission_mode = "auto"
     if sandbox_mode:
         config.sandbox_mode = sandbox_mode
-    if dev:
-        _start_dev(port)
-        return
     if desktop:
         _start_desktop(port)
-        return
-    if serve:
-        _start_server(port)
         return
     if once:
         sys.exit(asyncio.run(_run_once(config, once, session)))
     else:
         sys.exit(asyncio.run(_run_repl(config, session)))
-
-
-def _start_dev(port: int = 8765):
-    """归一化启动：一条命令拉起后端 + 桌面端（开发模式）。
-
-    架构:
-      - 后端在本进程前台跑（uvicorn），日志直接可见
-      - 桌面端 electron-vite dev 作为子进程
-      - Ctrl+C → 先停桌面端，再停后端，一起退出
-
-    对比旧方式（mai --serve + npx electron-vite dev 两条命令）:
-      一条命令、日志分离、退出统一。
-    """
-    import subprocess
-    from pathlib import Path
-
-    desktop_dir = Path(__file__).parent.parent / "desktop"
-
-    # 归一化数据根：无论从哪里敲命令，后端 cwd 都钉在项目根，
-    # 保证 .mai/traces、会话工作区、.env 来源唯一（与 Electron 拉起的后端一致）
-    os.chdir(Path(__file__).parent.parent)
-
-    # 1. 依赖检查
-    try:
-        subprocess.run(["node", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        console.print("[red]需要 Node.js 来运行桌面应用。请先安装 Node.js。[/red]")
-        sys.exit(1)
-    if not (desktop_dir / "node_modules" / "electron").exists():
-        console.print("[yellow]首次运行，正在安装 Electron（约 200MB）...[/yellow]")
-        result = subprocess.run(["npm", "install"], cwd=str(desktop_dir),
-                                capture_output=True, text=True)
-        if result.returncode != 0:
-            console.print(f"[red]Electron 安装失败: {result.stderr}[/red]")
-            sys.exit(1)
-        console.print("[green]Electron 安装完成[/green]")
-
-    # 2. 清理旧进程（避免端口冲突 + Electron 复用旧实例）
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                f'for /f "tokens=5" %a in (\'netstat -ano ^| findstr :{port}\') do taskkill /F /PID %a',
-                shell=True, capture_output=True, timeout=5,
-            )
-        except Exception:
-            pass
-
-    console.print(Panel.fit(
-        f"[bold]MAI-agent Dev[/bold]\n\n"
-        f"后端:    http://localhost:{port}\n"
-        f"前端:    electron-vite dev (HMR)\n\n"
-        f"[dim]一条命令启动全部。Ctrl+C 统一退出。[/dim]",
-        title="Dev",
-        border_style="green",
-    ))
-
-    # 3. 启动桌面端（子进程）；后端在本进程前台跑
-    npm_cmd = "npx.cmd" if os.name == "nt" else "npx"
-    desktop_proc = subprocess.Popen(
-        [npm_cmd, "electron-vite", "dev"],
-        cwd=str(desktop_dir),
-        env={**os.environ, "MAI_PORT": str(port),
-             "MAI_PYTHON": sys.executable,
-             "MAI_PROJECT_ROOT": str(Path(__file__).parent.parent),
-             "MAI_BACKEND_EXTERNAL": "1",  # 后端由 cli 进程内跑，Electron 只等待不 spawn
-             "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-    )
-
-    # 4. 本进程前台跑后端（uvicorn）
-    try:
-        from mai_agent.server import app
-        import uvicorn
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
-    except KeyboardInterrupt:
-        console.print("\n[yellow]正在退出...[/yellow]")
-    finally:
-        # 停桌面端（如果还活着）
-        if desktop_proc.poll() is None:
-            desktop_proc.terminate()
-            try:
-                desktop_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                desktop_proc.kill()
 
 
 def _start_desktop(port: int = 8765):
@@ -653,38 +562,6 @@ def _start_desktop(port: int = 8765):
         )
     except KeyboardInterrupt:
         pass
-
-
-def _start_server(port: int = 8765):
-    """启动桌面端服务器 + 自动打开浏览器。"""
-    import webbrowser
-    from pathlib import Path
-
-    # 归一化数据根（与 --desktop / --dev 一致）
-    os.chdir(Path(__file__).parent.parent)
-
-    from mai_agent.server import app
-
-    console.print(Panel.fit(
-        f"[bold]MAI-agent Desktop[/bold]\n\n"
-        f"服务器: [bold cyan]http://localhost:{port}[/bold cyan]\n"
-        f"WebSocket: [bold cyan]ws://localhost:{port}/ws[/bold cyan]\n\n"
-        f"[dim]浏览器将自动打开。按 Ctrl+C 停止。[/dim]",
-        title="Desktop Server",
-        border_style="green",
-    ))
-
-    # 延迟打开浏览器，留时间给服务器启动
-    def _open_browser():
-        import time
-        time.sleep(1.0)
-        webbrowser.open(f"http://localhost:{port}")
-
-    import threading
-    threading.Thread(target=_open_browser, daemon=True).start()
-
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
 if __name__ == "__main__":
