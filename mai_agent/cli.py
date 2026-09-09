@@ -516,6 +516,10 @@ def _start_dev(port: int = 8765):
 
     desktop_dir = Path(__file__).parent.parent / "desktop"
 
+    # 归一化数据根：无论从哪里敲命令，后端 cwd 都钉在项目根，
+    # 保证 .mai/traces、会话工作区、.env 来源唯一（与 Electron 拉起的后端一致）
+    os.chdir(Path(__file__).parent.parent)
+
     # 1. 依赖检查
     try:
         subprocess.run(["node", "--version"], capture_output=True, check=True)
@@ -556,6 +560,9 @@ def _start_dev(port: int = 8765):
         [npm_cmd, "electron-vite", "dev"],
         cwd=str(desktop_dir),
         env={**os.environ, "MAI_PORT": str(port),
+             "MAI_PYTHON": sys.executable,
+             "MAI_PROJECT_ROOT": str(Path(__file__).parent.parent),
+             "MAI_BACKEND_EXTERNAL": "1",  # 后端由 cli 进程内跑，Electron 只等待不 spawn
              "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
     )
 
@@ -582,13 +589,17 @@ def _start_desktop(port: int = 8765):
     架构（ChatGPT Desktop 同款）：
       Electron (Chromium 窗口) → 加载 localhost:PORT → Python 后端提供 WebSocket
 
-    Electron 主进程负责：窗口管理 + 系统托盘 + 启动/停止 Python 后端。
+    归一化（2026-09-08）：
+      后端只由 Electron 主进程（backend.ts）拉起，cwd 钉在项目根、
+      解释器用本命令的 sys.executable（经 MAI_PYTHON 传入）——
+      无论从哪里敲 mai --desktop，数据根（.mai/traces、会话、.env）唯一。
+      旧实现 cli 和 Electron 各拉一个后端抢端口，谁赢谁决定数据根，不一致。
     """
     import subprocess
-    import webbrowser
     from pathlib import Path
 
     desktop_dir = Path(__file__).parent.parent / "desktop"
+    project_root = Path(__file__).parent.parent
 
     # 1. 检查 Node.js
     try:
@@ -618,7 +629,7 @@ def _start_desktop(port: int = 8765):
         border_style="green",
     ))
 
-    # 2.5 清理旧进程（避免端口冲突）
+    # 3. 清理旧进程（避免端口冲突 + 旧后端占用数据根）
     if os.name == "nt":
         try:
             subprocess.run(
@@ -628,39 +639,30 @@ def _start_desktop(port: int = 8765):
         except Exception:
             pass
 
-    # 3. 启动 Python 后端（后台进程，强制 UTF-8）
-    python_env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
-    python_proc = subprocess.Popen(
-        [sys.executable, "-X", "utf8", "-c",
-         f"import uvicorn; from mai_agent.server import app; "
-         f"uvicorn.run(app, host='127.0.0.1', port={port}, log_level='error')"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=python_env,
-    )
-
-    # 4. 启动 Electron
+    # 4. 启动 Electron（后端由 Electron 主进程唯一拉起；不再在此 spawn，
+    #    否则两个启动器抢 8765、赢家的 cwd 决定数据根 → 数据不一致）
     e_bin = desktop_dir / "node_modules" / ".bin"
     e_cmd = str(e_bin / "electron.cmd" if os.name == "nt" else e_bin / "electron")
     try:
         subprocess.run(
             [e_cmd, "."],
             cwd=str(desktop_dir),
-            env={**os.environ, "MAI_PORT": str(port)},
+            env={**os.environ, "MAI_PORT": str(port),
+                 "MAI_PYTHON": sys.executable,
+                 "MAI_PROJECT_ROOT": str(project_root)},
         )
     except KeyboardInterrupt:
         pass
-    finally:
-        python_proc.terminate()
-        try:
-            python_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            python_proc.kill()
 
 
 def _start_server(port: int = 8765):
     """启动桌面端服务器 + 自动打开浏览器。"""
     import webbrowser
+    from pathlib import Path
+
+    # 归一化数据根（与 --desktop / --dev 一致）
+    os.chdir(Path(__file__).parent.parent)
+
     from mai_agent.server import app
 
     console.print(Panel.fit(

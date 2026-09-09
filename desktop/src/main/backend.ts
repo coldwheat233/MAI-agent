@@ -8,8 +8,12 @@ import { app } from 'electron'
 
 const SERVER_PORT = parseInt(process.env.MAI_PORT || '8765')
 const SERVER_URL = `http://localhost:${SERVER_PORT}`
-const PYTHON_CMD = 'python'
-const PROJECT_ROOT = path.resolve(__dirname, '..', '..', '..')
+// 归一化：解释器优先用启动命令传入的 sys.executable（MAI_PYTHON），
+// 保证和 `mai` 命令同一个 Python、同一份 mai_agent 代码
+const PYTHON_CMD = process.env.MAI_PYTHON || 'python'
+const PROJECT_ROOT = process.env.MAI_PROJECT_ROOT || path.resolve(__dirname, '..', '..', '..')
+// dev 模式（mai --dev）下后端由 cli 进程内运行，Electron 只等待不 spawn
+const BACKEND_EXTERNAL = process.env.MAI_BACKEND_EXTERNAL === '1'
 
 let pythonProcess: ChildProcess | null = null
 let stopping = false
@@ -22,7 +26,7 @@ function backendCommand(): { cmd: string; args: string[]; cwd: string } {
     const exePath = path.join(process.resourcesPath, 'backend', 'backend.exe')
     return { cmd: exePath, args: [], cwd: path.dirname(exePath) }
   }
-  // 开发模式：复用项目里的 Python + mai_agent 包
+  // 开发模式：复用项目里的 Python + mai_agent 包，cwd 钉在项目根（数据根唯一）
   return {
     cmd: PYTHON_CMD,
     args: [
@@ -34,7 +38,40 @@ function backendCommand(): { cmd: string; args: string[]; cwd: string } {
   }
 }
 
+/** 轮询直到后端就绪（不 spawn，用于外部后端模式）。 */
+function waitForBackend(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let attempts = 0
+    const maxAttempts = 60
+    const check = () => {
+      attempts++
+      http.get(`${SERVER_URL}/api/tools`, (res) => {
+        if (res.statusCode === 200) {
+          console.log('[electron] External backend ready')
+          resolve()
+        } else if (attempts < maxAttempts) {
+          setTimeout(check, 500)
+        } else {
+          reject(new Error('External backend startup timeout'))
+        }
+      }).on('error', () => {
+        if (attempts < maxAttempts) {
+          setTimeout(check, 500)
+        } else {
+          reject(new Error('External backend startup timeout'))
+        }
+      })
+    }
+    setTimeout(check, 1000)
+  })
+}
+
 export function startPythonBackend(): Promise<void> {
+  // 外部后端模式（mai --dev）：cli 进程内跑 uvicorn，这里只等它就绪
+  if (BACKEND_EXTERNAL) {
+    console.log('[electron] External backend mode, waiting...')
+    return waitForBackend()
+  }
   return new Promise((resolve, reject) => {
     stopping = false
     // Check if port already in use (previous session may still be running)
