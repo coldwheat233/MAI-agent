@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Optional
 
 from mai_agent.knowledge.vector_store import KnowledgeStore
-from mai_agent.knowledge.embedding import create_embedding
 from mai_agent.services.memory_tags import TaggedMemory, load_all_memories, load_memory_by_name
 
 logger = logging.getLogger(__name__)
@@ -30,8 +29,10 @@ _embedding_cache: dict[str, object] = {}
 def _get_store(project_root: str) -> Optional[KnowledgeStore]:
     """获取（或创建）工作区的卡片向量存储。
 
-    复用 KnowledgeStore（chroma + BM25 混合检索），embedding 用本地 bge-small-zh
-    （已缓存，避免 bge-m3 2.2GB 下载）。embedding 不可用时返回 None（纯关键词）。
+    卡片索引用独立的 chroma 集合 "cards"（与知识库 "knowledge" 隔离）——
+    两路数据维度/生命周期不同，混写同集合会维度不匹配报错且被 except 吞掉。
+    embedding 统一用 bge-large-zh（1024 维，本地快照直读，与知识库灌库一致）。
+    embedding 不可用时返回 None（纯关键词）。
     """
     key = str(Path(project_root).resolve())
     if key in _stores:
@@ -40,18 +41,22 @@ def _get_store(project_root: str) -> Optional[KnowledgeStore]:
         embedding = _embedding_cache.get(key)
         if embedding is None:
             from mai_agent.knowledge.embedding import LocalTransformer
-            # 优先用已缓存的 bge-small-zh；否则 fallback 默认（可能触发下载，失败降级）
-            cached = Path.home() / ".cache" / "huggingface" / "hub" / "models--BAAI--bge-small-zh-v1.5" / "snapshots"
+            # 直读本地快照路径：hub 按模型名解析会联网（SSL 必挂），
+            # 且 bge-large 缓存的 snapshot 目录名（1024d）非合法 commit hash
+            cached = Path.home() / ".cache" / "huggingface" / "hub" / "models--BAAI--bge-large-zh-v1.5" / "snapshots"
             model = None
             if cached.exists():
                 snaps = list(cached.iterdir())
                 if snaps:
                     model = str(snaps[0])
-            embedding = LocalTransformer(model_name=model) if model else create_embedding("local")
+            if model is None:
+                return None
+            embedding = LocalTransformer(model_name=model)
             _embedding_cache[key] = embedding
         store = KnowledgeStore(
             persist_dir=str(Path(project_root) / ".mai" / "chroma"),
             embedding_backend=embedding,
+            collection_name="cards",
         )
         _stores[key] = store
         return store

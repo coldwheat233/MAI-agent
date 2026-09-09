@@ -130,8 +130,10 @@ class KnowledgeStore:
         self,
         persist_dir: str = ".mai/chroma",
         embedding_backend=None,  # Optional[EmbeddingBackend]
+        collection_name: str = "knowledge",
     ):
         self.persist_dir = persist_dir
+        self._collection_name = collection_name
         self._embedding = embedding_backend
         self._chroma: Optional[object] = None
         self._collection: Optional[object] = None
@@ -151,11 +153,11 @@ class KnowledgeStore:
             self._chroma = chromadb.PersistentClient(path=self.persist_dir)
 
             try:
-                self._collection = self._chroma.get_collection("knowledge")
+                self._collection = self._chroma.get_collection(self._collection_name)
             except Exception:
                 dim = self._embedding.dim if self._embedding else 1024
                 self._collection = self._chroma.create_collection(
-                    "knowledge",
+                    self._collection_name,
                     metadata={"hnsw:space": "cosine"},
                     embedding_function=_NoOpEmbeddingFunction(dim=dim),  # 外部生成向量，chroma 内置 embedding 占位
                 )
@@ -313,14 +315,17 @@ class KnowledgeStore:
 _stores: dict[str, "KnowledgeStore"] = {}
 
 
-def get_store(persist_dir: str = ".mai/chroma", embedding_backend=None) -> "KnowledgeStore":
-    """按 persist_dir 缓存的 KnowledgeStore（保持 BM25 索引跨调用持久）。
+def get_store(persist_dir: str = ".mai/chroma", embedding_backend=None,
+              collection_name: str = "knowledge") -> "KnowledgeStore":
+    """按 (persist_dir, collection) 缓存的 KnowledgeStore（保持 BM25 索引跨调用持久）。
 
     engine._detect_concepts 每次 submit 都会触发，若每次 new 一个 store，BM25 索引
     会随实例一起丢失，边界检测退化为"永远未知"。缓存后 BM25 跨调用累积。
     """
-    if persist_dir not in _stores:
-        _stores[persist_dir] = KnowledgeStore(
+    key = f"{persist_dir}:{collection_name}"
+    if key not in _stores:
+        _stores[key] = KnowledgeStore(
             persist_dir=persist_dir, embedding_backend=embedding_backend,
+            collection_name=collection_name,
         )
-    return _stores[persist_dir]
+    return _stores[key]
