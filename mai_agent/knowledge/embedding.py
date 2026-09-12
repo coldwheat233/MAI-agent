@@ -160,3 +160,20 @@ def create_embedding(backend: str = "local", **kwargs) -> EmbeddingBackend:
         return APIEmbedding(**kwargs)
     else:
         raise ValueError(f"Unknown embedding backend: {backend}")
+
+
+def get_default_local_embedding() -> Optional[EmbeddingBackend]:
+    """默认本地 embedding：bge-large-zh 快照直读。
+
+    为什么不按模型名 "BAAI/bge-large-zh-v1.5" 加载：hub 名解析会发 HEAD 请求
+    联网（国内 SSL 必挂），且本地缓存的 snapshot 目录名（1024d）不是合法
+    commit hash，离线解析也失败。直读快照路径完全绕开 hub 解析。
+    1024 维，与 chroma 集合维度一致。不可用返回 None（调用方降级纯 BM25）。
+    """
+    from pathlib import Path
+    cached = Path.home() / ".cache" / "huggingface" / "hub" / "models--BAAI--bge-large-zh-v1.5" / "snapshots"
+    if cached.exists():
+        snaps = list(cached.iterdir())
+        if snaps:
+            return LocalTransformer(model_name=str(snaps[0]))
+    return None

@@ -40,18 +40,10 @@ def _get_store(project_root: str) -> Optional[KnowledgeStore]:
     try:
         embedding = _embedding_cache.get(key)
         if embedding is None:
-            from mai_agent.knowledge.embedding import LocalTransformer
-            # 直读本地快照路径：hub 按模型名解析会联网（SSL 必挂），
-            # 且 bge-large 缓存的 snapshot 目录名（1024d）非合法 commit hash
-            cached = Path.home() / ".cache" / "huggingface" / "hub" / "models--BAAI--bge-large-zh-v1.5" / "snapshots"
-            model = None
-            if cached.exists():
-                snaps = list(cached.iterdir())
-                if snaps:
-                    model = str(snaps[0])
-            if model is None:
+            from mai_agent.knowledge.embedding import get_default_local_embedding
+            embedding = get_default_local_embedding()
+            if embedding is None:
                 return None
-            embedding = LocalTransformer(model_name=model)
             _embedding_cache[key] = embedding
         store = KnowledgeStore(
             persist_dir=str(Path(project_root) / ".mai" / "chroma"),

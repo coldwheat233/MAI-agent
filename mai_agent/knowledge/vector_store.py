@@ -168,6 +168,29 @@ class KnowledgeStore:
             self._chroma_failed = True
             logger.warning("Chroma init failed (%s) — using BM25-only mode", exc)
 
+        # BM25 是纯内存索引（只随 add() 累积）——进程重启后若集合里已有数据，
+        # 从 chroma 回读重建，否则混合检索退化成"BM25 永远空"。
+        if self._collection is not None and not self._bm25._ids:
+            try:
+                all_docs = self._collection.get(include=["documents", "metadatas"])
+                ids = all_docs.get("ids", [])
+                docs = all_docs.get("documents", [])
+                metas = all_docs.get("metadatas", [])
+                n = 0
+                for i, did in enumerate(ids):
+                    meta = metas[i] if i < len(metas) else {}
+                    text = (meta or {}).get("_text") or (docs[i] if i < len(docs) else "") or ""
+                    if not text:
+                        continue
+                    self._bm25.add(did, text)
+                    self._texts[did] = text
+                    self._metas[did] = {k: v for k, v in (meta or {}).items() if k != "_text"}
+                    n += 1
+                if n:
+                    logger.info("BM25 索引从 chroma 重建: %d 条 (%s)", n, self._collection_name)
+            except Exception as exc:
+                logger.debug("BM25 从 chroma 重建失败: %s", exc)
+
     async def add(
         self,
         doc_id: str,

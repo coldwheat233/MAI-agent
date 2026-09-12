@@ -387,10 +387,16 @@ class AgentEngine:
         """后台知识引擎：LLM 抽概念 → BM25/向量+LLM 边界检测 → 入学习队列 + 写知识库。"""
         try:
             from mai_agent.knowledge.vector_store import get_store
+            from mai_agent.knowledge.embedding import get_default_local_embedding
             from mai_agent.knowledge.concept_detector import ConceptDetector
             from mai_agent.knowledge.learning_queue import list_items, add_item
 
-            store = get_store(self.config.cwd + "/.mai/chroma")
+            # 接本地 embedding（bge-large-zh 快照直读）：无它时向量召回关闭，
+            # 边界检测只剩 BM25 一路，语义相近但词面不重叠的概念会误判"未知"
+            store = get_store(
+                self.config.cwd + "/.mai/chroma",
+                embedding_backend=get_default_local_embedding(),
+            )
             detector = ConceptDetector(
                 knowledge_store=store,
                 api_key=self.config.llm_api_key,
