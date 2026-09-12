@@ -1,23 +1,13 @@
 __pycache__/
 *.pyc
 .env
-# .mai 默认忽略，但 Skill 体系（团队知识库）需要入库——
-# git 规则: 父目录被忽略则无法 unignore 子目录，所以逐级放开 .mai/ 再显式忽略私有数据
-.mai/
-!.mai/
+# .mai 运行时数据整体忽略（会话记忆/trace/日志/向量库/快照/部署计划/个人笔记文档），
+# 仅 Skill 体系（团队知识库）保留入库。
+# 写法说明: 用 .mai/* 而不是 .mai/ —— 父目录被整体忽略时 git 无法 unignore 其子目录，
+# 逐条忽略 .mai 下所有条目才能把 skills 重新放开；根级散落文件（SESSION_MEMORY.md 等）也被覆盖。
+.mai/*
 !.mai/skills/
 !.mai/skills/**
-.mai/logs/
-.mai/traces/
-.mai/sessions/
-.mai/memory/
-.mai/knowledge/
-.mai/chroma/
-.mai/deploys/
-.mai/snapshots/
-.mai/workspaces/
-.mai/mai.db
-.mai/workspaces.json
 # 独立 skill 项目不入库（ddo-code-flow 是独立项目，仅本地保留）
 .mai/skills/ddo-code-flow/
 dist/
